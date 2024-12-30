@@ -2,50 +2,45 @@
 from pathlib import Path
 
 class Config:
+    # Device settings
+    GPU_ID = 1  # Specify which GPU to use
+    
     # Paths
     ROOT_DIR = "/ssd_4TB/divake/CP_trust_IJCNN/dataset/modelnet40_normal_resampled"
     CHECKPOINT_DIR = Path("checkpoints")
     LOG_DIR = Path("logs")
     
     # Dataset parameters
-    BATCH_SIZE = 16
+    BATCH_SIZE = 32
     NUM_WORKERS = 4
+    NUM_POINTS = 1024
     
     # Model parameters
     MODEL = {
-        'dim': 256,          # Embedding dimension
-        'depth': 6,          # Number of transformer blocks
-        'num_heads': 8,      # Number of attention heads
-        'dropout': 0.5       # Dropout rate
+        'trans_dim': 384,
+        'depth': 12,
+        'num_heads': 6,
+        'drop_path_rate': 0.1,
+        'num_classes': 40,
+        'in_channels': 6  # New parameter for 6-channel input
     }
     
     # Training parameters
     TRAIN = {
-        'num_epochs': 100,
-        'learning_rate': 0.001,
-        'weight_decay': 1e-4,
+        'num_epochs': 300,
+        'learning_rate': 0.001,  # Slightly higher for training from scratch
+        'weight_decay': 0.05,
         'warmup_epochs': 10,
-        'min_lr': 1e-5,
-        'clip_grad': 1.0
+        'grad_norm_clip': 10,
+        'min_lr': 1e-5  # Minimum learning rate for cosine scheduling
     }
-    
-    # Optimizer parameters
-    OPTIMIZER = {
-        'type': 'AdamW',
-        'beta1': 0.9,
-        'beta2': 0.999,
-        'eps': 1e-8
-    }
-    
-    # Scheduler parameters
-    SCHEDULER = {
-        'type': 'CosineAnnealingLR',
-        'T_max': 200,  # Should match num_epochs
-        'eta_min': 1e-5
-    }
-    
+
     @classmethod
     def initialize(cls):
-        """Create necessary directories"""
+        """Create necessary directories for checkpoints and logs"""
         cls.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
         cls.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Convert string paths to Path objects
+        if not isinstance(cls.ROOT_DIR, Path):
+            cls.ROOT_DIR = Path(cls.ROOT_DIR)
