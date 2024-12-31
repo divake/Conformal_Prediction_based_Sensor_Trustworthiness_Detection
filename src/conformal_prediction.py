@@ -1,3 +1,5 @@
+#src/conformal_prediction.py
+
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -170,6 +172,125 @@ def plot_set_size_analysis(prediction_sets, coverage, save_dir='plots'):
     plt.savefig(save_dir / 'set_size_analysis.png', dpi=300, bbox_inches='tight')
     plt.close()
 
+def visualize_prediction_examples(model, dataloader, device, cal_softmax, cal_labels, n_samples=5, save_path='plots/example_predictions.png'):
+    """Visualize examples of different prediction set sizes with their softmax scores."""
+    model.eval()
+    
+    # Get predictions for all samples
+    all_points = []
+    all_softmax = []
+    all_labels = []
+    
+    with torch.no_grad():
+        for points, targets in dataloader:
+            points, targets = points.to(device), targets.to(device)
+            outputs = model(points)
+            softmax = F.softmax(outputs, dim=1)
+            all_points.append(points.cpu().numpy())
+            all_softmax.append(softmax.cpu().numpy())
+            all_labels.append(targets.cpu().numpy())
+    
+    all_points = np.concatenate(all_points)
+    all_softmax = np.concatenate(all_softmax)
+    all_labels = np.concatenate(all_labels)
+    
+    # Get prediction sets for all samples
+    coverage, avg_set_size, qhat, prediction_sets = conformal_prediction(
+        cal_softmax, cal_labels,
+        all_softmax, all_labels,
+        alpha=0.1,
+        k_reg=2,
+        lam_reg=0.05
+    )
+    
+    # Find examples for each set size from 1 to 5
+    examples = []
+    set_sizes = prediction_sets.sum(axis=1)
+    for size in range(1, 6):
+        size_indices = np.where(set_sizes == size)[0]
+        if len(size_indices) > 0:
+            idx = size_indices[0]  # Take first example of this size
+            examples.append({
+                'points': all_points[idx],
+                'softmax': all_softmax[idx],
+                'prediction_set': prediction_sets[idx],
+                'true_label': all_labels[idx],
+                'set_size': size
+            })
+    
+    # Create visualization with larger figure size
+    fig = plt.figure(figsize=(20, 8))
+    
+    class_names = [
+        'airplane', 'bathtub', 'bed', 'bench', 'bookshelf', 'bottle', 'bowl', 'car', 'chair',
+        'cone', 'cup', 'curtain', 'desk', 'door', 'dresser', 'flower_pot', 'glass_box',
+        'guitar', 'keyboard', 'lamp', 'laptop', 'mantel', 'monitor', 'night_stand',
+        'person', 'piano', 'plant', 'radio', 'range_hood', 'sink', 'sofa', 'stairs',
+        'stool', 'table', 'tent', 'toilet', 'tv_stand', 'vase', 'wardrobe', 'xbox'
+    ]
+    
+    for i, example in enumerate(examples):
+        # Create 3D subplot for point cloud
+        ax_3d = fig.add_subplot(2, len(examples), i+1, projection='3d')
+        points = example['points']
+        
+        # Normalize points to [-1, 1] range for better visualization
+        points_normalized = 2 * (points - points.min(axis=0)) / (points.max(axis=0) - points.min(axis=0)) - 1
+        
+        # Plot points with increased size and alpha
+        scatter = ax_3d.scatter(points_normalized[:, 0], 
+                              points_normalized[:, 1], 
+                              points_normalized[:, 2],
+                              s=15,  # Increased point size
+                              c=points_normalized[:, 2],  # Color by height
+                              cmap='viridis',  # Use viridis colormap
+                              alpha=0.8)  # Slight transparency
+        
+        # Set better viewing angle
+        ax_3d.view_init(elev=20, azim=45)
+        
+        # Add grid for better depth perception
+        ax_3d.grid(True, alpha=0.3)
+        
+        # Set axis labels and limits
+        ax_3d.set_xlim([-1.2, 1.2])
+        ax_3d.set_ylim([-1.2, 1.2])
+        ax_3d.set_zlim([-1.2, 1.2])
+        
+        # Remove ticks but keep grid
+        ax_3d.set_xticks([])
+        ax_3d.set_yticks([])
+        ax_3d.set_zticks([])
+        
+        ax_3d.set_title(f"Set Size: {example['set_size']}", pad=20, fontsize=12)
+        
+        # Create 2D subplot for text
+        ax_text = fig.add_subplot(2, len(examples), i+1+len(examples))
+        ax_text.axis('off')
+        
+        # Get prediction set classes and their softmax scores
+        pred_classes = np.where(example['prediction_set'])[0]
+        scores = example['softmax'][pred_classes]
+        
+        # Create prediction set text with softmax scores
+        pred_text = "Prediction Set:\n"
+        for cls, score in zip(pred_classes, scores):
+            pred_text += f"{class_names[cls]}: {score:.3f}\n"
+        
+        # Add true label
+        true_label = class_names[example['true_label']]
+        pred_text += f"\nTrue: {true_label}"
+        
+        # Add text with better formatting
+        ax_text.text(0.5, 0.5, pred_text,
+                    ha='center', va='center',
+                    fontsize=10,
+                    bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=10))
+    
+    plt.tight_layout()
+    plt.savefig(save_path, bbox_inches='tight', dpi=300, facecolor='white')
+    plt.close()
+
 def main():
     Config.initialize()
     logger = setup_logging()
@@ -220,6 +341,11 @@ def main():
     logger.info("Creating detailed set size analysis plots...")
     plot_set_size_analysis(prediction_sets, coverage*100)
     logger.info("Analysis plots saved to plots/set_size_analysis.png")
+
+    #Visualization
+    logger.info("Generating example visualizations...")
+    visualize_prediction_examples(model, test_loader, device, cal_softmax, cal_labels)
+    logger.info("Example visualizations saved to plots/example_predictions.png")
 
 if __name__ == '__main__':
     main()
