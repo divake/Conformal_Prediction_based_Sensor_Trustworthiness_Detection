@@ -17,8 +17,8 @@ def find_qhat_for_target_coverage(
     val_softmax: np.ndarray,
     val_labels: np.ndarray,
     target_coverage: float = 0.9,
-    k_reg: int = 2,
-    lam_reg: float = 0.05
+    k_reg: int = 5,
+    lam_reg: float = 0.01
 ) -> float:
     """
     Find the quantile (qhat) that achieves target coverage for the validation set
