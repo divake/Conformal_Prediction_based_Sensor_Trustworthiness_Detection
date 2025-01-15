@@ -298,22 +298,36 @@ def plot_nonconformity_analysis(
 
 def analyze_abstention_auc(tpr_rates: np.ndarray, fpr_rates: np.ndarray) -> float:
     """
-    Calculate area under the TPR vs FPR curve (similar to ROC AUC)
+    Calculate area under the TPR vs FPR curve (similar to ROC AUC),
+    properly handling partial curves
     
     Args:
         tpr_rates: Array of True Positive Rates
         fpr_rates: Array of False Positive Rates
     
     Returns:
-        float: Area under the curve score
+        float: Area under the curve score, normalized to the observed FPR range
     """
-    # Sort by FPR rates for proper AUC calculation
+    # Sort by FPR rates
     sort_idx = np.argsort(fpr_rates)
     fpr_sorted = fpr_rates[sort_idx]
     tpr_sorted = tpr_rates[sort_idx]
     
+    # Remove any duplicate FPR values by averaging corresponding TPR values
+    unique_fprs, unique_indices = np.unique(fpr_sorted, return_index=True)
+    unique_tprs = np.array([np.mean(tpr_sorted[fpr_sorted == fpr]) for fpr in unique_fprs])
+    
     # Calculate AUC using trapezoidal rule
-    return np.trapz(tpr_sorted, fpr_sorted)
+    auc_partial = np.trapz(unique_tprs, unique_fprs)
+    
+    # Normalize by the observed FPR range to get a value between 0 and 1
+    fpr_range = unique_fprs[-1] - unique_fprs[0]
+    if fpr_range > 0:
+        auc_normalized = auc_partial / fpr_range
+    else:
+        auc_normalized = 0.0
+    
+    return auc_normalized
 
 
 def main():
@@ -342,13 +356,12 @@ def main():
     
     # Analyze each severity level
     severity_levels = [1, 2, 3, 4, 5]
-    thresholds = np.linspace(0.1, 5.0, 50)  # Range for -log(softmax)
-#     thresholds = np.concatenate([
-#     np.linspace(0.01, 0.1, 20),  # More points in low threshold region
-#     np.linspace(0.1, 5.0, 50),   # Your current range
-#     np.linspace(5.0, 10.0, 20)   # Extended high threshold region
-#     np.linspace(0.0000000001, 20.0, 10000)   # Extended high threshold region
-# ])
+    thresholds = np.concatenate([
+        np.logspace(-15, -1, 60),    # Very small values (10^-15 to 10^-1)
+        np.linspace(0.1, 1.0, 30),  # Critical region
+        np.linspace(1.0, 5.0, 30),  # Current range
+        np.linspace(5.0, 20.0, 20)  # Extended high values
+    ])
 
 
     for severity in severity_levels:
