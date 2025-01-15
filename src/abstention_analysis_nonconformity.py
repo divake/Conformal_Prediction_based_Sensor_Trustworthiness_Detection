@@ -100,50 +100,41 @@ def analyze_nonconformity_abstention(
     true_labels: np.ndarray,
     thresholds: np.ndarray
 ) -> Dict:
-    """
-    Analyze abstention performance using nonconformity scores
-    
-    Args:
-        nonconformity_scores: Array of nonconformity scores
-        prediction_sets: (n_samples, n_classes) boolean array of prediction sets
-        true_labels: (n_samples,) array of true labels
-        thresholds: Array of threshold values to try
-    """
     results = {}
     n_samples = len(true_labels)
     
     # Check if true labels are in prediction sets
     true_labels_in_set = prediction_sets[np.arange(n_samples), true_labels]
     
+    # Total samples that should be abstained (label not in prediction set)
+    should_abstain = ~true_labels_in_set
+    # Total samples that should not be abstained (label in prediction set)
+    should_not_abstain = true_labels_in_set
+    
     for threshold in thresholds:
         # Abstain if nonconformity score is high
         abstained = nonconformity_scores > threshold
         
-        # Calculate TPA and FPA
-        tpa = np.sum(abstained & ~true_labels_in_set)
-        fpa = np.sum(abstained & true_labels_in_set)
+        # True Positives: correctly abstained (abstained when should abstain)
+        tp = np.sum(abstained & should_abstain)
+        # False Positives: incorrectly abstained (abstained when should not abstain)
+        fp = np.sum(abstained & should_not_abstain)
         
-        total_abstentions = np.sum(abstained)
+        # Calculate proper rates
+        tpr = tp / np.sum(should_abstain) if np.sum(should_abstain) > 0 else 0.0
+        fpr = fp / np.sum(should_not_abstain) if np.sum(should_not_abstain) > 0 else 0.0
         
-        if total_abstentions > 0:
-            tpa_rate = tpa / total_abstentions
-            fpa_rate = fpa / total_abstentions
-        else:
-            tpa_rate = 0.0
-            fpa_rate = 0.0
-            
-        abstention_rate = total_abstentions / n_samples
+        abstention_rate = np.sum(abstained) / n_samples
         
         results[threshold] = {
-            'tpa': tpa,
-            'fpa': fpa,
-            'tpa_rate': tpa_rate,
-            'fpa_rate': fpa_rate,
+            'tp': tp,
+            'fp': fp,
+            'tpr': tpr,
+            'fpr': fpr,
             'abstention_rate': abstention_rate
         }
     
     return results
-
 
 def analyze_prediction_stats(prediction_sets: np.ndarray, true_labels: np.ndarray) -> Dict:
     """
@@ -204,15 +195,6 @@ def plot_set_size_distribution(
     plt.savefig(save_dir / f'set_size_distribution_severity_{severity}.png')
     plt.close()
 
-def analyze_abstention_auc(tpa_rates: np.ndarray, fpa_rates: np.ndarray) -> float:
-    """Calculate area under the TPA vs FPA curve"""
-    # Sort by FPA rates for proper AUC calculation
-    sort_idx = np.argsort(fpa_rates)
-    fpa_sorted = fpa_rates[sort_idx]
-    tpa_sorted = tpa_rates[sort_idx]
-    
-    return np.trapz(tpa_sorted, fpa_sorted)
-
 def find_optimal_threshold_with_constraints(
     results: Dict,
     min_coverage: float = 0.9,
@@ -239,25 +221,24 @@ def find_optimal_threshold_with_constraints(
         if (effective_coverage >= min_coverage and 
             metrics['abstention_rate'] >= min_abstention):
             
-            # Score based on TPA-FPA difference and abstention rate
-            score = (metrics['tpa_rate'] - metrics['fpa_rate']) 
+            # Score based on TPR-FPR difference and abstention rate
+            score = (metrics['tpr'] - metrics['fpr'])  # Changed from tpa_rate/fpa_rate
             
             if score > best_score:
                 best_score = score
                 best_threshold = threshold
                 best_metrics = metrics
     
-    # If no threshold satisfies constraints, take the one with best TPA-FPA difference
+    # If no threshold satisfies constraints, take the one with best TPR-FPR difference
     if best_threshold is None:
         for threshold, metrics in results.items():
-            score = (metrics['tpa_rate'] - metrics['fpa_rate'])
+            score = (metrics['tpr'] - metrics['fpr'])  # Changed from tpa_rate/fpa_rate
             if score > best_score:
                 best_score = score
                 best_threshold = threshold
                 best_metrics = metrics
     
     return best_threshold, best_metrics
-
 
 
 def plot_nonconformity_analysis(
@@ -270,20 +251,20 @@ def plot_nonconformity_analysis(
     save_dir.mkdir(parents=True, exist_ok=True)
     
     thresholds = sorted(list(results.keys()))
-    tpa_rates = [results[t]['tpa_rate'] for t in thresholds]
-    fpa_rates = [results[t]['fpa_rate'] for t in thresholds]
+    tpr_rates = [results[t]['tpr'] for t in thresholds]  # Updated from tpa_rate
+    fpr_rates = [results[t]['fpr'] for t in thresholds]  # Updated from fpa_rate
     abstention_rates = [results[t]['abstention_rate'] for t in thresholds]
     
     # Create figure with multiple subplots
     fig, axs = plt.subplots(2, 2, figsize=(15, 12))
     fig.suptitle(f'Nonconformity-based Abstention Analysis (Severity {severity})', fontsize=14)
     
-    # 1. TPA vs FPA curve
-    axs[0, 0].plot(fpa_rates, tpa_rates, 'o-')
+    # 1. TPR vs FPR curve (ROC-like curve)
+    axs[0, 0].plot(fpr_rates, tpr_rates, 'o-')
     axs[0, 0].plot([0, 1], [0, 1], 'k--', alpha=0.5)
-    axs[0, 0].set_xlabel('False Positive Abstention Rate')
-    axs[0, 0].set_ylabel('True Positive Abstention Rate')
-    axs[0, 0].set_title('TPA vs FPA')
+    axs[0, 0].set_xlabel('False Positive Rate (FPR)')
+    axs[0, 0].set_ylabel('True Positive Rate (TPR)')
+    axs[0, 0].set_title('TPR vs FPR')
     axs[0, 0].grid(True)
     
     # 2. Abstention rate vs threshold
@@ -293,27 +274,47 @@ def plot_nonconformity_analysis(
     axs[0, 1].set_title('Abstention Rate vs Threshold')
     axs[0, 1].grid(True)
     
-    # 3. TPA and FPA rates vs threshold
-    axs[1, 0].plot(thresholds, tpa_rates, 'o-', label='TPA Rate')
-    axs[1, 0].plot(thresholds, fpa_rates, 'o-', label='FPA Rate')
+    # 3. TPR and FPR rates vs threshold
+    axs[1, 0].plot(thresholds, tpr_rates, 'o-', label='TPR')
+    axs[1, 0].plot(thresholds, fpr_rates, 'o-', label='FPR')
     axs[1, 0].set_xlabel('Nonconformity Threshold')
     axs[1, 0].set_ylabel('Rate')
-    axs[1, 0].set_title('TPA and FPA Rates vs Threshold')
+    axs[1, 0].set_title('TPR and FPR vs Threshold')
     axs[1, 0].grid(True)
     axs[1, 0].legend()
     
-    # 4. TPA-FPA difference vs threshold
-    diff_rates = [tpa - fpa for tpa, fpa in zip(tpa_rates, fpa_rates)]
+    # 4. TPR-FPR difference vs threshold
+    diff_rates = [tpr - fpr for tpr, fpr in zip(tpr_rates, fpr_rates)]
     axs[1, 1].plot(thresholds, diff_rates, 'o-')
     axs[1, 1].axhline(y=0, color='k', linestyle='--', alpha=0.5)
     axs[1, 1].set_xlabel('Nonconformity Threshold')
-    axs[1, 1].set_ylabel('TPA - FPA')
-    axs[1, 1].set_title('TPA-FPA Difference vs Threshold')
+    axs[1, 1].set_ylabel('TPR - FPR')
+    axs[1, 1].set_title('TPR-FPR Difference vs Threshold')
     axs[1, 1].grid(True)
     
     plt.tight_layout()
     plt.savefig(save_dir / f'nonconformity_abstention_analysis_severity_{severity}.png')
     plt.close()
+
+def analyze_abstention_auc(tpr_rates: np.ndarray, fpr_rates: np.ndarray) -> float:
+    """
+    Calculate area under the TPR vs FPR curve (similar to ROC AUC)
+    
+    Args:
+        tpr_rates: Array of True Positive Rates
+        fpr_rates: Array of False Positive Rates
+    
+    Returns:
+        float: Area under the curve score
+    """
+    # Sort by FPR rates for proper AUC calculation
+    sort_idx = np.argsort(fpr_rates)
+    fpr_sorted = fpr_rates[sort_idx]
+    tpr_sorted = tpr_rates[sort_idx]
+    
+    # Calculate AUC using trapezoidal rule
+    return np.trapz(tpr_sorted, fpr_sorted)
+
 
 def main():
     # Initialize configuration and logging
@@ -342,7 +343,14 @@ def main():
     # Analyze each severity level
     severity_levels = [1, 2, 3, 4, 5]
     thresholds = np.linspace(0.1, 5.0, 50)  # Range for -log(softmax)
-    
+#     thresholds = np.concatenate([
+#     np.linspace(0.01, 0.1, 20),  # More points in low threshold region
+#     np.linspace(0.1, 5.0, 50),   # Your current range
+#     np.linspace(5.0, 10.0, 20)   # Extended high threshold region
+#     np.linspace(0.0000000001, 20.0, 10000)   # Extended high threshold region
+# ])
+
+
     for severity in severity_levels:
         logger.info(f"Analyzing severity level {severity}")
         
@@ -397,8 +405,8 @@ def main():
             logger.warning("No threshold found satisfying constraints. Using fallback selection.")
             # Use simple threshold selection as fallback
             best_threshold = min(results.keys(), 
-                               key=lambda t: (results[t]['tpa_rate'] < results[t]['fpa_rate'], 
-                                            -results[t]['tpa_rate'] + results[t]['fpa_rate']))
+                                key=lambda t: (results[t]['tpr'] < results[t]['fpr'],  # Updated from tpa_rate/fpa_rate
+                                            -results[t]['tpr'] + results[t]['fpr']))
             best_metrics = results[best_threshold]
         
         # Plot results
@@ -412,8 +420,8 @@ def main():
         logger.info(f"\nNonconformity Abstention Results (Severity {severity}):")
         logger.info(f"qhat: {qhat:.4f}")
         logger.info(f"Best threshold: {best_threshold:.4f}")
-        logger.info(f"TPA Rate: {best_metrics['tpa_rate']:.4f}")
-        logger.info(f"FPA Rate: {best_metrics['fpa_rate']:.4f}")
+        logger.info(f"TPR: {best_metrics['tpr']:.4f}")  # Changed from tpa_rate
+        logger.info(f"FPR: {best_metrics['fpr']:.4f}")  # Changed from fpa_rate
         logger.info(f"Abstention Rate: {best_metrics['abstention_rate']:.4f}")
 
         logger.info(f"\nPrediction Set Statistics (Severity {severity}):")
@@ -423,9 +431,9 @@ def main():
         logger.info(f"Maximum Set Size: {prediction_stats['max_set_size']}")
         
         # Calculate AUC for abstention
-        tpa_rates = np.array([m['tpa_rate'] for m in results.values()])
-        fpa_rates = np.array([m['fpa_rate'] for m in results.values()])
-        auc = analyze_abstention_auc(tpa_rates, fpa_rates)
+        tpr_rates = np.array([m['tpr'] for m in results.values()])  # Changed from tpa_rate
+        fpr_rates = np.array([m['fpr'] for m in results.values()])  # Changed from fpa_rate
+        auc = analyze_abstention_auc(tpr_rates, fpr_rates)
         logger.info(f"Abstention AUC: {auc:.4f}")
 
 if __name__ == '__main__':
