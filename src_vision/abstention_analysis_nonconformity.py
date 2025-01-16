@@ -15,54 +15,89 @@ from utils.model_utils import get_model_predictions
 from utils.logging_utils import setup_logging
 
 
-def find_prediction_set_threshold(
-    cal_scores: np.ndarray,
-    alpha: float = 0.1  # For 90% coverage
-) -> float:
-    """Find conformal threshold (first qhat) for prediction sets."""
+def compute_conformal_scores(softmax_scores: np.ndarray, labels: np.ndarray, k_reg: int = 5, lam_reg: float = 0.01) -> np.ndarray:
+    """
+    Compute adaptive conformal scores following RAPS approach.
+    
+    Args:
+        softmax_scores: softmax probabilities [n_samples, n_classes]
+        labels: true labels [n_samples]
+        k_reg: number of top classes without regularization
+        lam_reg: regularization strength
+    """
+    n_samples, n_classes = softmax_scores.shape
+    
+    # Create regularization vector
+    reg_vec = np.array([0]*k_reg + [lam_reg]*(n_classes-k_reg))[None,:]
+    
+    # Sort probabilities and add regularization
+    sort_idx = np.argsort(softmax_scores, axis=1)[:,::-1]
+    sorted_probs = np.take_along_axis(softmax_scores, sort_idx, axis=1)
+    sorted_reg = sorted_probs + reg_vec
+    
+    # Find positions of true labels
+    true_label_pos = np.where(sort_idx == labels[:,None])[1]
+    
+    # Compute scores with randomization
+    rand_terms = np.random.rand(n_samples) * sorted_reg[np.arange(n_samples), true_label_pos]
+    scores = sorted_reg.cumsum(axis=1)[np.arange(n_samples), true_label_pos] - rand_terms
+    
+    return scores
+
+def find_prediction_set_threshold(cal_scores: np.ndarray, alpha: float = 0.1) -> float:
+    """
+    Find conformal threshold with proper finite sample correction.
+    """
     n = len(cal_scores)
-    qhat = np.quantile(cal_scores, 1 - alpha, method='higher')
+    qhat = np.quantile(cal_scores, np.ceil((n+1)*(1-alpha))/n, method='higher')
     return qhat
 
-def compute_conformal_scores(
-    softmax_scores: np.ndarray,
-    labels: np.ndarray
-) -> np.ndarray:
-    """Compute conformal scores for adaptive prediction sets."""
-    n_samples = len(labels)
-    scores = []
-    
-    for i in range(n_samples):
-        # Sort probabilities in descending order
-        sorted_probs = np.sort(softmax_scores[i])[::-1]
-        cumsum_probs = np.cumsum(sorted_probs)
-        
-        # Find true class position
-        true_class_rank = np.where(
-            np.argsort(softmax_scores[i])[::-1] == labels[i]
-        )[0][0]
-        
-        # Score is cumulative probability up to true class
-        score = cumsum_probs[true_class_rank]
-        scores.append(score)
-    
-    return np.array(scores)
-
 def get_prediction_sets(
-    softmax_scores: np.ndarray,
-    qhat: float
+    softmax_scores: np.ndarray, 
+    qhat: float,
+    k_reg: int = 5,
+    lam_reg: float = 0.01,
+    rand: bool = True
 ) -> np.ndarray:
-    """Generate prediction sets using conformal threshold."""
+    """
+    Generate prediction sets using conformal threshold with RAPS approach.
+    """
     n_samples, n_classes = softmax_scores.shape
-    prediction_sets = np.zeros((n_samples, n_classes), dtype=bool)
+    reg_vec = np.array([0]*k_reg + [lam_reg]*(n_classes-k_reg))[None,:]
     
-    for i in range(n_samples):
-        sorted_idx = np.argsort(softmax_scores[i])[::-1]
-        cumsum = np.cumsum(softmax_scores[i][sorted_idx])
-        set_size = np.searchsorted(cumsum, qhat) + 1
-        prediction_sets[i, sorted_idx[:set_size]] = True
+    # Sort and regularize
+    sort_idx = np.argsort(softmax_scores, axis=1)[:,::-1]
+    sorted_probs = np.take_along_axis(softmax_scores, sort_idx, axis=1)
+    sorted_reg = sorted_probs + reg_vec
+    
+    # Compute cumulative sums
+    cumsum_reg = sorted_reg.cumsum(axis=1)
+    
+    if rand:
+        # With randomization
+        rand_terms = np.random.rand(n_samples, 1) * sorted_reg
+        indicators = (cumsum_reg - rand_terms) <= qhat
+    else:
+        # Without randomization
+        indicators = cumsum_reg - sorted_reg <= qhat
+    
+    # Map back to original class order
+    prediction_sets = np.take_along_axis(indicators, sort_idx.argsort(axis=1), axis=1)
     
     return prediction_sets
+
+def evaluate_sets(prediction_sets: np.ndarray, labels: np.ndarray) -> dict:
+    """Evaluate prediction set performance."""
+    coverage = np.mean(prediction_sets[np.arange(len(labels)), labels])
+    set_sizes = prediction_sets.sum(axis=1)
+    return {
+        'coverage': coverage,
+        'avg_set_size': np.mean(set_sizes),
+        'std_set_size': np.std(set_sizes),
+        'max_set_size': np.max(set_sizes),
+        'min_set_size': np.min(set_sizes)
+    }
+
 
 def compute_nonconformity_scores(
     softmax_scores: np.ndarray,
@@ -131,6 +166,9 @@ def calculate_auc(results: Dict) -> float:
 
 def main():
     # Setup
+    np.random.seed(42)  # For reproducible randomization in conformal prediction
+    torch.manual_seed(42)
+    
     device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
     logger = setup_logging('vision_conformal')
     
@@ -143,27 +181,37 @@ def main():
     
     _, cal_loader, test_loader, _, _, test_dataset = setup_cifar100()
     
+    # Conformal prediction parameters
+    k_reg = 5  # No regularization for top-5 classes
+    lam_reg = 0.01  # Regularization strength
+    alpha = 0.1  # Target 90% coverage
+    
     # Get calibration predictions
     cal_probs, cal_labels = get_model_predictions(model, cal_loader, device)
     
-    # Compute calibration scores and find initial qhat
-    cal_scores = compute_conformal_scores(cal_probs, cal_labels)
-    conformal_qhat = find_prediction_set_threshold(cal_scores)
+    # Calibration phase
+    logger.info("Starting calibration phase...")
+    cal_scores = compute_conformal_scores(cal_probs, cal_labels, k_reg, lam_reg)
+    conformal_qhat = find_prediction_set_threshold(cal_scores, alpha=alpha)
+    
+    # Validate calibration set performance
+    cal_sets = get_prediction_sets(cal_probs, conformal_qhat, k_reg, lam_reg)
+    cal_metrics = evaluate_sets(cal_sets, cal_labels)
+    logger.info(f"Calibration set metrics:")
+    logger.info(f"Coverage: {cal_metrics['coverage']:.4f}")
+    logger.info(f"Average set size: {cal_metrics['avg_set_size']:.4f}")
     
     # Analysis parameters
     severity_levels = [1, 2, 3, 4, 5]
-    abstention_thresholds = np.linspace(0, 5, 50)  # Range for log probabilities
+    abstention_thresholds = np.linspace(0, 5, 50)
     
     # Results storage
     results_by_severity = {}
-    severities = []
-    coverages = []
-    set_sizes = []
-    abstention_rates = []
+    severities, coverages, set_sizes, abstention_rates = [], [], [], []
     set_sizes_by_severity = {}
     
     for severity in severity_levels:
-        logger.info(f"Analyzing severity {severity}")
+        logger.info(f"\nAnalyzing severity {severity}")
         
         # Create corrupted dataset and get predictions
         corrupted_dataset = CorruptedCIFAR100Dataset(
@@ -176,9 +224,8 @@ def main():
         test_probs, test_labels = get_model_predictions(model, corrupted_loader, device)
         
         # Generate prediction sets
-        prediction_sets = get_prediction_sets(test_probs, conformal_qhat)
-        coverage = np.mean(prediction_sets[np.arange(len(test_labels)), test_labels])
-        avg_set_size = np.mean(prediction_sets.sum(axis=1))
+        prediction_sets = get_prediction_sets(test_probs, conformal_qhat, k_reg, lam_reg)
+        metrics = evaluate_sets(prediction_sets, test_labels)
         
         # Store set sizes for distribution plot
         set_sizes_by_severity[severity] = prediction_sets.sum(axis=1)
@@ -194,32 +241,30 @@ def main():
         
         # Store metrics for plotting
         severities.append(severity)
-        coverages.append(coverage)
-        set_sizes.append(avg_set_size)
-        # Calculate mean abstention rate across thresholds
+        coverages.append(metrics['coverage'])
+        set_sizes.append(metrics['avg_set_size'])
         mean_abstention = np.mean([res['abstention_rate'] 
-                                 for res in abstention_results.values()])
+                                for res in abstention_results.values()])
         abstention_rates.append(mean_abstention)
         
         # Store results
         results_by_severity[severity] = {
-            'coverage': coverage,
-            'avg_set_size': avg_set_size,
+            **metrics,  # Include all metrics from evaluate_sets
             'abstention_qhat': abstention_qhat,
             'abstention_results': abstention_results,
             'auc': auc,
-            'prediction_sets': prediction_sets  # Store for possible later use
+            'prediction_sets': prediction_sets
         }
         
         # Log results
-        logger.info(f"Coverage: {coverage:.4f}")
-        logger.info(f"Average set size: {avg_set_size:.4f}")
+        logger.info(f"Coverage: {metrics['coverage']:.4f}")
+        logger.info(f"Average set size: {metrics['avg_set_size']:.4f}")
+        logger.info(f"Set size std: {metrics['std_set_size']:.4f}")
         logger.info(f"AUC: {auc:.4f}")
     
-    # Create plot directories
+    # Create plot directories and generate visualizations
     plot_dirs = create_plot_dirs('plots_vision')
     
-    # Generate visualization plots
     plot_metrics_vs_severity(
         severities=severities,
         coverages=coverages,
@@ -231,7 +276,7 @@ def main():
     plot_roc_curves(results_by_severity, save_dir=plot_dirs['roc'])
     plot_set_size_distribution(set_sizes_by_severity, save_dir=plot_dirs['set_sizes'])
     
-    # Generate abstention analysis plots for each severity
+    # Generate abstention analysis plots
     for severity in severity_levels:
         results = results_by_severity[severity]['abstention_results']
         thresholds = sorted(results.keys())
@@ -248,7 +293,7 @@ def main():
             save_dir=plot_dirs['abstention']
         )
     
-    logger.info("Analysis completed. Plots saved in plots_vision directory.")
+    logger.info("\nAnalysis completed. Plots saved in plots_vision directory.")
 
 if __name__ == '__main__':
     main()

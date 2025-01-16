@@ -22,9 +22,9 @@ class FogCorruption:
         self.fog_params = {
             1: {'max_val': 0.1, 'decay': 0.8},
             2: {'max_val': 0.2, 'decay': 0.7},
-            3: {'max_val': 0.3, 'decay': 0.6},
-            4: {'max_val': 0.4, 'decay': 0.5},
-            5: {'max_val': 0.5, 'decay': 0.4}
+            3: {'max_val': 0.5, 'decay': 0.5},
+            4: {'max_val': 0.6, 'decay': 0.3},
+            5: {'max_val': 0.8, 'decay': 0.1}
         }
 
     def _create_fog_mask(self, shape):
@@ -37,7 +37,7 @@ class FogCorruption:
         fade = np.tile(fade[:, np.newaxis], (1, shape[1]))
         
         # Add some randomness to the fog pattern
-        noise = np.random.rand(*shape) * 0.2
+        noise = np.random.rand(*shape) * 0.5
         mask = fade * params['max_val'] + noise * params['max_val']
         mask = np.clip(mask, 0, 1)
         
