@@ -5,4 +5,4 @@ __pycache__/
 *.pyc
 best_model.pth
 logs/
-plots/
+plots*/
