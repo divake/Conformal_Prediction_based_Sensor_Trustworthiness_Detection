@@ -57,35 +57,33 @@ def get_prediction_sets(
     qhat: float,
     k_reg: int = 5,
     lam_reg: float = 0.02,
-    severity: int = None,
     rand: bool = True
 ) -> np.ndarray:
     """
-    Generate prediction sets with minimal regularization at high severities.
+    Generate prediction sets with adaptive regularization based on predictive uncertainty.
     """
     n_samples, n_classes = softmax_scores.shape
     
-    if severity is not None:
-        # Extremely minimal regularization at high severities
-        severity_factors = {
-            1: 0.9,    # 90% of base regularization
-            2: 0.7,    # 70% of base regularization
-            3: 0.4,    # 40% of base regularization
-            4: 0.1,    # 10% of base regularization
-            5: 0.01    # 1% of base regularization (almost no regularization)
-        }
-        
-        effective_lam = lam_reg * severity_factors[severity]
-        print(f"Using effective lambda: {effective_lam:.6f} (original: {lam_reg})")
-        print(f"Using qhat: {qhat:.6f}")
-    else:
-        effective_lam = lam_reg
+    # Compute uncertainty metrics for each sample
+    entropy = -np.sum(softmax_scores * np.log(softmax_scores + 1e-7), axis=1)
+    max_probs = np.max(softmax_scores, axis=1)
     
-    # Add base regularization to ensure numerical stability
+    # Normalize entropy to [0,1] range
+    normalized_entropy = entropy / np.log(n_classes)
+    
+    # Compute adaptive regularization based on uncertainty
+    # High entropy/low confidence -> less regularization
+    adaptive_factor = np.clip(1.0 - normalized_entropy, 0.01, 1.0)
+    
+    # Create sample-specific regularization
     base_reg = 1e-6
+    effective_lam = lam_reg * adaptive_factor[:, None]  # Make it broadcastable
     
-    # Create regularization vector
-    reg_vec = np.array([base_reg]*k_reg + [effective_lam + base_reg]*(n_classes-k_reg))[None,:]
+    # Create regularization vector per sample
+    reg_vec = np.concatenate([
+        np.zeros((n_samples, k_reg)),
+        np.broadcast_to(effective_lam, (n_samples, n_classes - k_reg))
+    ], axis=1)
     
     # Sort and regularize
     sort_idx = np.argsort(softmax_scores, axis=1)[:,::-1]
@@ -105,6 +103,19 @@ def get_prediction_sets(
     prediction_sets = np.take_along_axis(indicators, sort_idx.argsort(axis=1), axis=1)
     
     return prediction_sets
+
+def compute_uncertainty_metrics(softmax_scores: np.ndarray) -> Dict[str, np.ndarray]:
+    """Compute various uncertainty metrics from softmax scores."""
+    entropy = -np.sum(softmax_scores * np.log(softmax_scores + 1e-7), axis=1)
+    max_probs = np.max(softmax_scores, axis=1)
+    margin = np.sort(softmax_scores, axis=1)[:, -1] - np.sort(softmax_scores, axis=1)[:, -2]
+    
+    return {
+        'entropy': entropy,
+        'confidence': max_probs,
+        'margin': margin,
+        'normalized_entropy': entropy / np.log(softmax_scores.shape[1])
+    }
 
 
 def evaluate_sets(prediction_sets: np.ndarray, labels: np.ndarray) -> dict:
@@ -185,6 +196,22 @@ def calculate_auc(results: Dict) -> float:
     
     return np.trapz(tpr, fpr)
 
+def analyze_distribution_shift(softmax_scores_by_severity):
+    """
+    Analyze distribution shift patterns in softmax scores across severities.
+    Args:
+        softmax_scores_by_severity: Dict mapping severity levels to softmax score arrays
+    """
+    for severity, scores in softmax_scores_by_severity.items():
+        # Analyze probability distribution patterns
+        top_k_probs = np.sort(scores, axis=1)[:, -5:]  # Top 5 probabilities
+        prob_spread = np.mean(top_k_probs, axis=0)
+        entropy = -np.sum(scores * np.log(scores + 1e-7), axis=1).mean()
+        
+        print(f"\nSeverity {severity}:")
+        print(f"Average top-5 probs: {prob_spread}")
+        print(f"Average entropy: {entropy}")
+
 def main():
     # Setup
     np.random.seed(42)  # For reproducible randomization in conformal prediction
@@ -215,8 +242,11 @@ def main():
     cal_scores = compute_conformal_scores(cal_probs, cal_labels, k_reg, lam_reg)
     conformal_qhat = find_prediction_set_threshold(cal_scores, alpha=alpha)
     
+    # Print the value of conformal_qhat
+    print(f"Conformal qhat: {conformal_qhat}")
+    
     # Validate calibration set performance
-    cal_sets = get_prediction_sets(cal_probs, conformal_qhat, k_reg, lam_reg,severity=None)
+    cal_sets = get_prediction_sets(cal_probs, conformal_qhat, k_reg, lam_reg)
     cal_metrics = evaluate_sets(cal_sets, cal_labels)
     logger.info(f"Calibration set metrics:")
     logger.info(f"Coverage: {cal_metrics['coverage']:.4f}")
@@ -232,6 +262,9 @@ def main():
     set_sizes_by_severity = {}
     softmax_scores_by_severity = {}
     
+    # Track uncertainty metrics
+    uncertainty_metrics_by_severity = {}
+
     for severity in severity_levels:
         logger.info(f"\nAnalyzing severity {severity}")
         
@@ -248,8 +281,13 @@ def main():
         # Store softmax scores for distribution analysis
         softmax_scores_by_severity[severity] = test_probs
 
+        # Compute uncertainty metrics
+        uncertainty_metrics = compute_uncertainty_metrics(test_probs)
+        uncertainty_metrics_by_severity[severity] = uncertainty_metrics
+
+
         # Generate prediction sets
-        prediction_sets = get_prediction_sets(test_probs, conformal_qhat, k_reg, lam_reg, severity=severity)
+        prediction_sets = get_prediction_sets(test_probs, conformal_qhat, k_reg, lam_reg)
         metrics = evaluate_sets(prediction_sets, test_labels)
         
         # Store set sizes for distribution plot
@@ -260,6 +298,9 @@ def main():
         abstention_qhat, abstention_results = analyze_abstention(
             nonconf_scores, prediction_sets, test_labels, abstention_thresholds
         )
+        
+        # Print the value of abstention_qhat
+        print(f"Abstention qhat for severity {severity}: {abstention_qhat}")
         
         # Calculate AUC
         auc = calculate_auc(abstention_results)
@@ -286,6 +327,24 @@ def main():
         logger.info(f"Average set size: {metrics['avg_set_size']:.4f}")
         logger.info(f"Set size std: {metrics['std_set_size']:.4f}")
         logger.info(f"AUC: {auc:.4f}")
+
+        # After your severity loop but before plotting
+        logger.info("\nAnalyzing distribution shift patterns...")
+        analyze_distribution_shift(softmax_scores_by_severity)
+        
+        # You can also store these metrics
+        shift_metrics = {}
+        for severity, scores in softmax_scores_by_severity.items():
+            # Get more detailed metrics
+            top_k_probs = np.sort(scores, axis=1)[:, -5:]  # Top 5 probabilities
+            entropy = -np.sum(scores * np.log(scores + 1e-7), axis=1)
+            
+            shift_metrics[severity] = {
+                'top_k_probs': np.mean(top_k_probs, axis=0),
+                'entropy_mean': np.mean(entropy),
+                'entropy_std': np.std(entropy),
+                'max_prob_mean': np.mean(np.max(scores, axis=1))
+            }
     
     # Create plot directories and generate visualizations
     plot_dirs = create_plot_dirs('plots_vision')
