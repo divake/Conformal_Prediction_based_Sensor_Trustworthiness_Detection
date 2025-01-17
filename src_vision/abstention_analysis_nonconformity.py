@@ -10,20 +10,20 @@ import timm
 from scipy import stats
 from data.cifar100 import setup_cifar100
 from data.corruptions import CorruptedCIFAR100Dataset, FogCorruption
-from utils.visualization import plot_metrics_vs_severity, plot_roc_curves, plot_set_size_distribution, create_plot_dirs, plot_abstention_analysis
+from utils.visualization import plot_metrics_vs_severity, plot_roc_curves, plot_set_size_distribution, create_plot_dirs, plot_abstention_analysis,plot_confidence_distributions, analyze_severity_impact
 from utils.model_utils import get_model_predictions
 from utils.logging_utils import setup_logging
 
 
-def compute_conformal_scores(softmax_scores: np.ndarray, labels: np.ndarray, k_reg: int = 5, lam_reg: float = 0.01) -> np.ndarray:
+def compute_conformal_scores(
+    softmax_scores: np.ndarray, 
+    labels: np.ndarray, 
+    k_reg: int = 5, 
+    lam_reg: float = 0.02
+) -> np.ndarray:
     """
-    Compute adaptive conformal scores following RAPS approach.
-    
-    Args:
-        softmax_scores: softmax probabilities [n_samples, n_classes]
-        labels: true labels [n_samples]
-        k_reg: number of top classes without regularization
-        lam_reg: regularization strength
+    Compute adaptive conformal scores.
+    For calibration data, we use the base regularization (no severity adjustment).
     """
     n_samples, n_classes = softmax_scores.shape
     
@@ -56,14 +56,36 @@ def get_prediction_sets(
     softmax_scores: np.ndarray, 
     qhat: float,
     k_reg: int = 5,
-    lam_reg: float = 0.01,
+    lam_reg: float = 0.02,
+    severity: int = None,
     rand: bool = True
 ) -> np.ndarray:
     """
-    Generate prediction sets using conformal threshold with RAPS approach.
+    Generate prediction sets with minimal regularization at high severities.
     """
     n_samples, n_classes = softmax_scores.shape
-    reg_vec = np.array([0]*k_reg + [lam_reg]*(n_classes-k_reg))[None,:]
+    
+    if severity is not None:
+        # Extremely minimal regularization at high severities
+        severity_factors = {
+            1: 0.9,    # 90% of base regularization
+            2: 0.7,    # 70% of base regularization
+            3: 0.4,    # 40% of base regularization
+            4: 0.1,    # 10% of base regularization
+            5: 0.01    # 1% of base regularization (almost no regularization)
+        }
+        
+        effective_lam = lam_reg * severity_factors[severity]
+        print(f"Using effective lambda: {effective_lam:.6f} (original: {lam_reg})")
+        print(f"Using qhat: {qhat:.6f}")
+    else:
+        effective_lam = lam_reg
+    
+    # Add base regularization to ensure numerical stability
+    base_reg = 1e-6
+    
+    # Create regularization vector
+    reg_vec = np.array([base_reg]*k_reg + [effective_lam + base_reg]*(n_classes-k_reg))[None,:]
     
     # Sort and regularize
     sort_idx = np.argsort(softmax_scores, axis=1)[:,::-1]
@@ -74,17 +96,16 @@ def get_prediction_sets(
     cumsum_reg = sorted_reg.cumsum(axis=1)
     
     if rand:
-        # With randomization
         rand_terms = np.random.rand(n_samples, 1) * sorted_reg
         indicators = (cumsum_reg - rand_terms) <= qhat
     else:
-        # Without randomization
         indicators = cumsum_reg - sorted_reg <= qhat
     
     # Map back to original class order
     prediction_sets = np.take_along_axis(indicators, sort_idx.argsort(axis=1), axis=1)
     
     return prediction_sets
+
 
 def evaluate_sets(prediction_sets: np.ndarray, labels: np.ndarray) -> dict:
     """Evaluate prediction set performance."""
@@ -183,8 +204,8 @@ def main():
     
     # Conformal prediction parameters
     k_reg = 5  # No regularization for top-5 classes
-    lam_reg = 0.01  # Regularization strength
-    alpha = 0.1  # Target 90% coverage
+    lam_reg = 0.02  # Regularization strength
+    alpha = 0.08  # Target 90% coverage
     
     # Get calibration predictions
     cal_probs, cal_labels = get_model_predictions(model, cal_loader, device)
@@ -195,7 +216,7 @@ def main():
     conformal_qhat = find_prediction_set_threshold(cal_scores, alpha=alpha)
     
     # Validate calibration set performance
-    cal_sets = get_prediction_sets(cal_probs, conformal_qhat, k_reg, lam_reg)
+    cal_sets = get_prediction_sets(cal_probs, conformal_qhat, k_reg, lam_reg,severity=None)
     cal_metrics = evaluate_sets(cal_sets, cal_labels)
     logger.info(f"Calibration set metrics:")
     logger.info(f"Coverage: {cal_metrics['coverage']:.4f}")
@@ -209,6 +230,7 @@ def main():
     results_by_severity = {}
     severities, coverages, set_sizes, abstention_rates = [], [], [], []
     set_sizes_by_severity = {}
+    softmax_scores_by_severity = {}
     
     for severity in severity_levels:
         logger.info(f"\nAnalyzing severity {severity}")
@@ -223,8 +245,11 @@ def main():
         )
         test_probs, test_labels = get_model_predictions(model, corrupted_loader, device)
         
+        # Store softmax scores for distribution analysis
+        softmax_scores_by_severity[severity] = test_probs
+
         # Generate prediction sets
-        prediction_sets = get_prediction_sets(test_probs, conformal_qhat, k_reg, lam_reg)
+        prediction_sets = get_prediction_sets(test_probs, conformal_qhat, k_reg, lam_reg, severity=severity)
         metrics = evaluate_sets(prediction_sets, test_labels)
         
         # Store set sizes for distribution plot
@@ -265,6 +290,21 @@ def main():
     # Create plot directories and generate visualizations
     plot_dirs = create_plot_dirs('plots_vision')
     
+    # Add new visualization calls right after creating plot directories
+    plot_confidence_distributions(
+        softmax_scores_by_severity=softmax_scores_by_severity,
+        set_sizes_by_severity=set_sizes_by_severity,  # Add this
+        save_dir=plot_dirs['metrics']
+    )
+    analyze_severity_impact(
+        softmax_scores_by_severity=softmax_scores_by_severity,
+        conformal_qhat=conformal_qhat,
+        k_reg=k_reg,
+        lam_reg=lam_reg,
+        save_dir=plot_dirs['metrics']
+    )
+
+
     plot_metrics_vs_severity(
         severities=severities,
         coverages=coverages,

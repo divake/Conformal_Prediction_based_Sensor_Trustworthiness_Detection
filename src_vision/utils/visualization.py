@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple
 import seaborn as sns
+import os
 
 def create_plot_dirs(base_dir: str = 'plots_vision') -> Dict[str, Path]:
     """Create all needed plot directories."""
@@ -184,4 +185,112 @@ def plot_abstention_analysis(
     
     plt.tight_layout()
     plt.savefig(save_dir / f'abstention_analysis_severity_{severity}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_confidence_distributions(
+    softmax_scores_by_severity: Dict[int, np.ndarray],
+    set_sizes_by_severity: Dict[int, np.ndarray],  # Add this parameter
+    save_dir: str
+) -> None:
+    """
+    Plot distributions of model confidence across severities.
+    
+    Args:
+        softmax_scores_by_severity: Dict mapping severity to softmax scores array
+        set_sizes_by_severity: Dict mapping severity to set sizes array
+        save_dir: Directory to save plots
+    """
+    plt.figure(figsize=(15, 10))
+    
+    # Plot top-1 probability distributions
+    plt.subplot(2, 2, 1)
+    for severity, scores in softmax_scores_by_severity.items():
+        top1_probs = np.max(scores, axis=1)
+        plt.hist(top1_probs, bins=50, alpha=0.5, label=f'Severity {severity}', density=True)
+    plt.xlabel('Top-1 Probability')
+    plt.ylabel('Density')
+    plt.title('Distribution of Top-1 Probabilities')
+    plt.legend()
+    
+    # Plot entropy distributions
+    plt.subplot(2, 2, 2)
+    for severity, scores in softmax_scores_by_severity.items():
+        entropy = -np.sum(scores * np.log(scores + 1e-10), axis=1)
+        plt.hist(entropy, bins=50, alpha=0.5, label=f'Severity {severity}', density=True)
+    plt.xlabel('Entropy')
+    plt.ylabel('Density')
+    plt.title('Distribution of Prediction Entropy')
+    plt.legend()
+    
+    # Plot cumulative probability curves
+    plt.subplot(2, 2, 3)
+    for severity, scores in softmax_scores_by_severity.items():
+        sorted_probs = np.sort(scores, axis=1)[:, ::-1]
+        mean_cumsum = np.mean(np.cumsum(sorted_probs, axis=1), axis=0)
+        plt.plot(range(1, len(mean_cumsum) + 1), mean_cumsum, 
+                label=f'Severity {severity}', marker='o', markersize=3)
+    plt.xlabel('Number of Classes')
+    plt.ylabel('Cumulative Probability')
+    plt.title('Average Cumulative Probability Curves')
+    plt.legend()
+    
+    # Plot set size distributions
+    plt.subplot(2, 2, 4)
+    for severity, scores in set_sizes_by_severity.items():
+        max_score = int(np.max(scores))
+        plt.hist(scores, bins=range(0, max_score + 2), 
+                alpha=0.5, label=f'Severity {severity}', density=True)
+    plt.xlabel('Set Size')
+    plt.ylabel('Density')
+    plt.title('Distribution of Prediction Set Sizes')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'confidence_distributions.png'))
+    plt.close()
+
+def analyze_severity_impact(
+    softmax_scores_by_severity: Dict[int, np.ndarray],
+    conformal_qhat: float,
+    k_reg: int,
+    lam_reg: float,
+    save_dir: str
+) -> None:
+    """
+    Analyze how severity affects conformal scores and thresholds.
+    
+    Args:
+        softmax_scores_by_severity: Dict mapping severity to softmax scores array
+        conformal_qhat: The conformal threshold
+        k_reg: Number of top classes without regularization
+        lam_reg: Regularization strength
+        save_dir: Directory to save plots
+    """
+    plt.figure(figsize=(12, 6))
+    
+    # Plot average conformal scores by severity
+    for severity, scores in softmax_scores_by_severity.items():
+        reg_vec = np.array([0]*k_reg + [lam_reg]*(scores.shape[1]-k_reg))[None,:]
+        sort_idx = np.argsort(scores, axis=1)[:,::-1]
+        sorted_probs = np.take_along_axis(scores, sort_idx, axis=1)
+        sorted_reg = sorted_probs + reg_vec
+        cumsum_reg = sorted_reg.cumsum(axis=1)
+        
+        mean_scores = np.mean(cumsum_reg, axis=0)
+        std_scores = np.std(cumsum_reg, axis=0)
+        
+        plt.plot(range(1, len(mean_scores) + 1), mean_scores, 
+                label=f'Severity {severity}')
+        plt.fill_between(range(1, len(mean_scores) + 1), 
+                        mean_scores - std_scores, 
+                        mean_scores + std_scores, 
+                        alpha=0.2)
+    
+    plt.axhline(y=conformal_qhat, color='r', linestyle='--', 
+                label='Conformal Threshold')
+    plt.xlabel('Number of Classes')
+    plt.ylabel('Cumulative Score')
+    plt.title('Average Conformal Scores by Severity')
+    plt.legend()
+    plt.savefig(os.path.join(save_dir, 'severity_impact.png'))
     plt.close()
