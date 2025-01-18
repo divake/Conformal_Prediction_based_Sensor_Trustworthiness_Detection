@@ -234,6 +234,15 @@ def main():
     lam_reg = 0.02  # Regularization strength
     alpha = 0.08  # Target 90% coverage
     
+    # Analysis parameters
+    severity_levels = [1, 2, 3, 4, 5]
+    
+    # Increase the abstention span with a combination of linear and log-spaced thresholds
+    low_range = np.linspace(0, 0.1, 50)
+    mid_range = np.linspace(0.1, 1, 50)
+    high_range = np.exp(np.linspace(0, np.log(5), 50))
+    abstention_thresholds = np.unique(np.concatenate([low_range, mid_range, high_range]))
+    
     # Get calibration predictions
     cal_probs, cal_labels = get_model_predictions(model, cal_loader, device)
     
@@ -252,9 +261,17 @@ def main():
     logger.info(f"Coverage: {cal_metrics['coverage']:.4f}")
     logger.info(f"Average set size: {cal_metrics['avg_set_size']:.4f}")
     
-    # Analysis parameters
-    severity_levels = [1, 2, 3, 4, 5]
-    abstention_thresholds = np.linspace(0, 5, 50)
+    # Compute abstention threshold on calibration data
+    cal_prediction_sets = get_prediction_sets(cal_probs, conformal_qhat, k_reg, lam_reg)
+    cal_nonconf_scores = compute_nonconformity_scores(cal_probs, cal_labels)
+    abstention_qhat, _ = analyze_abstention(
+        cal_nonconf_scores, 
+        cal_prediction_sets,
+        cal_labels,
+        abstention_thresholds
+    )
+    
+    print(f"Abstention qhat from calibration: {abstention_qhat}")
     
     # Results storage
     results_by_severity = {}
@@ -293,14 +310,28 @@ def main():
         # Store set sizes for distribution plot
         set_sizes_by_severity[severity] = prediction_sets.sum(axis=1)
         
-        # Compute nonconformity scores and analyze abstention
+        # Compute nonconformity scores and use calibration's abstention_qhat
         nonconf_scores = compute_nonconformity_scores(test_probs, test_labels)
-        abstention_qhat, abstention_results = analyze_abstention(
-            nonconf_scores, prediction_sets, test_labels, abstention_thresholds
-        )
-        
-        # Print the value of abstention_qhat
-        print(f"Abstention qhat for severity {severity}: {abstention_qhat}")
+        true_labels_in_set = prediction_sets[np.arange(len(test_labels)), test_labels]
+        should_abstain = ~true_labels_in_set
+
+        abstention_results = {}
+        for threshold in abstention_thresholds:
+            abstained = nonconf_scores > threshold
+            
+            tp = np.sum(abstained & should_abstain)
+            fp = np.sum(abstained & ~should_abstain)
+            tn = np.sum(~abstained & ~should_abstain)
+            fn = np.sum(~abstained & should_abstain)
+            
+            tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+            
+            abstention_results[threshold] = {
+                'tpr': tpr,
+                'fpr': fpr,
+                'abstention_rate': np.mean(abstained)
+            }
         
         # Calculate AUC
         auc = calculate_auc(abstention_results)
