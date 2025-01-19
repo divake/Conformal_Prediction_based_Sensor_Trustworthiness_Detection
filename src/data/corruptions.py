@@ -2,24 +2,15 @@
 
 import torch
 import numpy as np
-from typing import Optional, Dict, Type, Tuple
+from typing import Optional, Type
 from torch.utils.data import Dataset
 from .dataset import ModelNet40Dataset
 
-class PointCloudCorruption:
-    """Base class for point cloud corruptions"""
+class OcclusionCorruption:
+    """Occlusion corruption for point clouds"""
     def __init__(self, severity_levels: int = 5, seed: Optional[int] = None):
         self.severity_levels = severity_levels
         self.rng = np.random.RandomState(seed)
-
-    def __call__(self, points: np.ndarray, severity: int) -> np.ndarray:
-        """Apply corruption to point cloud"""
-        raise NotImplementedError
-
-class OcclusionCorruption(PointCloudCorruption):
-    """Occlusion corruption for point clouds"""
-    def __init__(self, severity_levels: int = 5, seed: Optional[int] = None):
-        super().__init__(severity_levels, seed)
         # Percentage of points to remove for each severity level
         self.removal_ratios = {
             1: 0.1,  # 10% points removed
@@ -57,24 +48,33 @@ class OcclusionCorruption(PointCloudCorruption):
         
         return corrupted_points
 
+
 class CorruptedModelNet40Dataset(Dataset):
     """Dataset wrapper that applies corruptions to ModelNet40 point clouds"""
     def __init__(
         self,
         base_dataset: ModelNet40Dataset,
-        corruption_type: Type[PointCloudCorruption],
+        corruption_type: Type[OcclusionCorruption],
         severity: int,
         seed: Optional[int] = None
     ):
+        """
+        Args:
+            base_dataset: Original ModelNet40 dataset
+            corruption_type: Type of corruption to apply (e.g., OcclusionCorruption)
+            severity: Severity level of corruption (1-5)
+            seed: Random seed for reproducibility
+        """
         self.base_dataset = base_dataset
         self.corruption = corruption_type(seed=seed)
         self.severity = severity
         self.seed = seed
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.base_dataset)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> tuple:
+        # Get original point cloud and label
         points, label = self.base_dataset[idx]
         
         # Convert to numpy for corruption

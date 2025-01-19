@@ -61,23 +61,37 @@ def find_prediction_set_threshold(
     level_adjusted = (1 - alpha) * (1 + 1/n)
     return np.quantile(cal_scores, 1 - level_adjusted, method='higher')
 
+def compute_uncertainty_metrics(softmax_scores: np.ndarray) -> Dict[str, float]:
+    """Compute uncertainty metrics from softmax scores."""
+    entropy = -np.sum(softmax_scores * np.log(softmax_scores + 1e-7), axis=1)
+    max_probs = np.max(softmax_scores, axis=1)
+    margin = np.sort(softmax_scores, axis=1)[:, -1] - np.sort(softmax_scores, axis=1)[:, -2]
+    
+    return {
+        'entropy': entropy,
+        'confidence': max_probs,
+        'margin': margin,
+        'normalized_entropy': entropy / np.log(softmax_scores.shape[1])
+    }
+
 def compute_raps_scores(
     softmax_scores: np.ndarray,
     labels: np.ndarray,
     k_reg: int = 5,
-    lam_reg: float = 0.01,
-    severity: int = 1
+    lam_reg: float = 0.01
 ) -> np.ndarray:
     """
-    Compute RAPS scores with severity-aware scaling
+    Compute RAPS scores using adaptive regularization based on uncertainty
     """
     n_samples = len(labels)
     n_classes = softmax_scores.shape[1]
     
-    # More aggressive regularization for higher severities
-    base_reg = lam_reg * (1 + 0.25 * (severity - 1))
-    reg_vec = np.zeros(n_classes)
-    reg_vec[k_reg:] = base_reg
+    # Compute uncertainty metrics
+    uncertainty = compute_uncertainty_metrics(softmax_scores)
+    
+    # Adaptive regularization based on uncertainty
+    # High entropy/low confidence -> less regularization
+    adaptive_factor = np.clip(1.0 - uncertainty['normalized_entropy'], 0.01, 1.0)
     
     scores = []
     for i in range(n_samples):
@@ -85,14 +99,20 @@ def compute_raps_scores(
         srt = softmax_scores[i][pi]
         true_class_idx = np.where(pi == labels[i])[0][0]
         
-        # Adaptive confidence scaling
-        conf_scale = 1.0 + 0.1 * (severity - 1)
-        norm_probs = srt / (srt[0] * conf_scale)
+        # Scale probabilities based on confidence
+        conf_scale = np.clip(uncertainty['confidence'][i], 0.1, 1.0)
+        norm_probs = srt / conf_scale
         
-        # Compute score with severity-aware size
-        max_size = min(2 + int(1.5 * severity), 6)
+        # Adaptive regularization
+        effective_reg = lam_reg * adaptive_factor[i]
+        reg_vec = np.zeros(n_classes)
+        reg_vec[k_reg:] = effective_reg
+        
+        # Dynamic set size based on uncertainty
+        max_size = min(n_classes, int(2 + 5 * uncertainty['normalized_entropy'][i]))
+        
         cum_prob = np.cumsum(norm_probs[:max_size])
-        cum_reg = cum_prob + reg_vec[:max_size] * (1 + 0.1 * (severity - 1))
+        cum_reg = cum_prob + reg_vec[:max_size]
         
         if true_class_idx < max_size:
             score = cum_reg[true_class_idx]
@@ -106,36 +126,39 @@ def get_prediction_sets_raps(
     softmax_scores: np.ndarray,
     threshold: float,
     k_reg: int = 5,
-    lam_reg: float = 0.01,
-    severity: int = 1
+    lam_reg: float = 0.01
 ) -> np.ndarray:
-    """Generate prediction sets with severity-aware scaling"""
+    """Generate prediction sets with adaptive regularization"""
     n_samples, n_classes = softmax_scores.shape
     prediction_sets = np.zeros((n_samples, n_classes), dtype=bool)
     
-    base_reg = lam_reg * (1 + 0.25 * (severity - 1))
-    reg_vec = np.zeros(n_classes)
-    reg_vec[k_reg:] = base_reg
-    
-    # Adaptive size control
-    min_size = 1 + int(0.5 * (severity - 1))
-    max_size = min(2 + int(1.5 * severity), 6)
+    # Compute uncertainty metrics for adaptive behavior
+    uncertainty = compute_uncertainty_metrics(softmax_scores)
+    adaptive_factor = np.clip(1.0 - uncertainty['normalized_entropy'], 0.01, 1.0)
     
     for i in range(n_samples):
         pi = softmax_scores[i].argsort()[::-1]
         srt = softmax_scores[i][pi]
         
-        # Apply confidence scaling
-        conf_scale = 1.0 + 0.1 * (severity - 1)
-        norm_probs = srt / (srt[0] * conf_scale)
+        # Adaptive regularization
+        effective_reg = lam_reg * adaptive_factor[i]
+        reg_vec = np.zeros(n_classes)
+        reg_vec[k_reg:] = effective_reg
+        
+        # Scale based on confidence
+        conf_scale = np.clip(uncertainty['confidence'][i], 0.1, 1.0)
+        norm_probs = srt / conf_scale
+        
+        # Dynamic set size based on uncertainty
+        max_size = min(n_classes, int(2 + 5 * uncertainty['normalized_entropy'][i]))
         
         # Compute cumulative sums with regularization
-        cum_prob = np.cumsum(norm_probs)
-        cum_reg = cum_prob + reg_vec * (1 + 0.1 * (severity - 1))
+        cum_prob = np.cumsum(norm_probs[:max_size])
+        cum_reg = cum_prob + reg_vec[:max_size]
         
-        # Determine set size
-        set_size = min_size  # Start with minimum size
-        for j in range(min_size, min(max_size + 1, n_classes)):
+        # Determine set size based on threshold
+        set_size = 1  # Minimum size
+        for j in range(1, max_size + 1):
             if cum_reg[j-1] <= threshold:
                 set_size = j
             else:
@@ -152,21 +175,19 @@ def conformal_prediction_raps(
     val_labels: np.ndarray,
     k_reg: int = 5,
     lam_reg: float = 0.01,
-    severity: int = 1,
     alpha: float = 0.1
 ) -> Tuple[float, float, float, np.ndarray]:
     """
     Run conformal prediction with improved severity handling
     """
     # More aggressive alpha adjustment for higher severities
-    effective_alpha = alpha / (1 + 0.15 * (severity - 1))
+    effective_alpha = alpha
     
     # Compute calibration scores
     cal_scores = compute_raps_scores(
         cal_softmax, cal_labels,
         k_reg=k_reg,
-        lam_reg=lam_reg,
-        severity=severity
+        lam_reg=lam_reg
     )
     
     # Find base threshold
@@ -175,15 +196,14 @@ def conformal_prediction_raps(
     base_threshold = np.quantile(cal_scores, level, method='higher')
     
     # Apply severity-aware threshold scaling
-    threshold = base_threshold * (1 + 0.1 * (severity - 1))
+    threshold = base_threshold
     
     # Generate prediction sets
     prediction_sets = get_prediction_sets_raps(
         val_softmax,
         threshold,
         k_reg=k_reg,
-        lam_reg=lam_reg,
-        severity=severity
+        lam_reg=lam_reg
     )
     
     # Calculate metrics
@@ -202,33 +222,35 @@ def analyze_nonconformity_abstention(
     prediction_sets: np.ndarray,
     true_labels: np.ndarray,
     thresholds: np.ndarray,
-    severity: int  # New parameter
+    softmax_scores: np.ndarray  # Added to access uncertainty
 ) -> Dict:
     n_samples = len(true_labels)
     results = {}
+    
+    # Calculate uncertainty metrics
+    uncertainty = compute_uncertainty_metrics(softmax_scores)
     
     # Calculate class probabilities from prediction sets
     true_labels_in_set = prediction_sets[np.arange(n_samples), true_labels]
     set_sizes = np.sum(prediction_sets, axis=1)
     
-    # Define severity-dependent criteria
-    base_size = 1 + severity  # Expected set size increases with severity
-    size_penalty = (set_sizes - base_size) / base_size  # Penalize larger sets
+    # Define adaptive criteria based on uncertainty
+    expected_size = 1 + 3 * uncertainty['normalized_entropy']  # Size grows with uncertainty
+    size_penalty = (set_sizes - expected_size) / expected_size
     
-    # Ground truth: we should abstain when either:
+    # Ground truth: we should abstain when:
     # 1. True label not in set
-    # 2. Set size is much larger than expected for this severity
-    # 3. Nonconformity score is in top quartile
-    nonconf_threshold = np.percentile(nonconformity_scores, 75)
+    # 2. Set size is much larger than expected given uncertainty
+    # 3. High uncertainty (top quartile of entropy)
+    entropy_threshold = np.percentile(uncertainty['entropy'], 75)
     ground_truth_abstain = (
         (~true_labels_in_set) |  # Wrong prediction
-        (size_penalty > 0.5) |   # Too large set
-        (nonconformity_scores > nonconf_threshold)  # High uncertainty
+        (size_penalty > 0.5) |   # Too large set given uncertainty
+        (uncertainty['entropy'] > entropy_threshold)  # High uncertainty
     )
     
     # Print diagnostic info
-    print(f"\nSeverity {severity} diagnostics:")
-    print(f"Base expected size: {base_size}")
+    print(f"\nSeverity diagnostics:")
     print(f"Mean size penalty: {np.mean(size_penalty):.4f}")
     print(f"Ground truth abstain rate: {np.mean(ground_truth_abstain):.4f}")
     
@@ -423,7 +445,6 @@ def main():
             val_softmax, val_labels,
             k_reg=5,
             lam_reg=0.01,
-            severity=severity,
             alpha=0.1
         )
         
@@ -439,7 +460,7 @@ def main():
             prediction_sets,
             val_labels,
             thresholds,
-            severity=severity
+            softmax_scores=val_softmax
         )
         
         # Find optimal threshold with constraints from results
