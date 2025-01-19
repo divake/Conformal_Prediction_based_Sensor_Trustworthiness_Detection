@@ -7,14 +7,13 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 from scipy.stats import binom
 from conformal_prediction import conformal_prediction, get_softmax_predictions, create_dataloader
-from data.corrupted_dataset import CorruptedModelNet40Dataset
-from data.corruptions import OcclusionCorruption
+from data.corruptions import CorruptedModelNet40Dataset, OcclusionCorruption  # Updated import
 from config import Config
-# from main import setup_logging
 from data.dataset import ModelNet40Dataset
 from models.point_transformer_v2 import PointTransformerV2
 from torch.utils.data import DataLoader
 import logging
+from utils.visualization import create_plot_dirs, plot_nonconformity_analysis, plot_metrics_vs_severity, plot_roc_curves, plot_set_size_distribution
 
 def setup_logging(logger_name: str = 'nonconformity_abstention') -> logging.Logger:
     """Set up logging configuration
@@ -293,34 +292,6 @@ def analyze_prediction_stats(prediction_sets: np.ndarray, true_labels: np.ndarra
         'set_size_distribution': np.bincount(set_sizes)
     }
 
-def plot_set_size_distribution(
-    set_size_stats: Dict,
-    severity: int,
-    save_dir: str = 'plots/prediction_stats'
-):
-    """Plot set size distribution and statistics"""
-    save_dir = Path(save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-    
-    dist = set_size_stats['set_size_distribution']
-    
-    plt.figure(figsize=(10, 6))
-    plt.bar(range(len(dist)), dist)
-    plt.axvline(set_size_stats['avg_set_size'], color='r', linestyle='--', 
-                label=f'Mean: {set_size_stats["avg_set_size"]:.2f}')
-    plt.axvline(set_size_stats['median_set_size'], color='g', linestyle='--', 
-                label=f'Median: {set_size_stats["median_set_size"]:.2f}')
-    
-    plt.xlabel('Set Size')
-    plt.ylabel('Count')
-    plt.title(f'Prediction Set Size Distribution (Severity {severity})\n' +
-              f'Coverage: {set_size_stats["coverage"]:.2%}')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.savefig(save_dir / f'set_size_distribution_severity_{severity}.png')
-    plt.close()
-
 def find_abstention_threshold(
     results: Dict,
     target_coverage: float = 0.9,
@@ -352,59 +323,6 @@ def find_abstention_threshold(
         )
     
     return best_threshold, results[best_threshold]
-
-def plot_nonconformity_analysis(
-    results: Dict,
-    severity: int,
-    save_dir: str = 'plots/nonconformity_abstention'
-) -> None:
-    """Plot analysis results with linear scale thresholds"""
-    save_dir = Path(save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-    
-    thresholds = sorted(list(results.keys()))
-    tpr_rates = [results[t]['tpr'] for t in thresholds]
-    fpr_rates = [results[t]['fpr'] for t in thresholds]
-    abstention_rates = [results[t]['abstention_rate'] for t in thresholds]
-    
-    fig, axs = plt.subplots(2, 2, figsize=(15, 12))
-    fig.suptitle(f'Nonconformity-based Abstention Analysis (Severity {severity})', fontsize=14)
-    
-    # All plots now use linear scale
-    axs[0, 0].plot(fpr_rates, tpr_rates, 'o-')
-    axs[0, 0].plot([0, 1], [0, 1], 'k--', alpha=0.5)
-    axs[0, 0].set_xlabel('False Positive Rate (FPR)')
-    axs[0, 0].set_ylabel('True Positive Rate (TPR)')
-    axs[0, 0].set_title('TPR vs FPR')
-    axs[0, 0].grid(True)
-    
-    axs[0, 1].plot(thresholds, abstention_rates, 'o-')
-    axs[0, 1].set_xlabel('Nonconformity Threshold (1 - probability)')
-    axs[0, 1].set_ylabel('Abstention Rate')
-    axs[0, 1].set_title('Abstention Rate vs Threshold')
-    axs[0, 1].grid(True)
-    
-    # 3. TPR and FPR rates vs threshold
-    axs[1, 0].plot(thresholds, tpr_rates, 'o-', label='TPR')
-    axs[1, 0].plot(thresholds, fpr_rates, 'o-', label='FPR')
-    axs[1, 0].set_xlabel('Nonconformity Threshold')
-    axs[1, 0].set_ylabel('Rate')
-    axs[1, 0].set_title('TPR and FPR vs Threshold')
-    axs[1, 0].grid(True)
-    axs[1, 0].legend()
-    
-    # 4. TPR-FPR difference vs threshold
-    diff_rates = [tpr - fpr for tpr, fpr in zip(tpr_rates, fpr_rates)]
-    axs[1, 1].plot(thresholds, diff_rates, 'o-')
-    axs[1, 1].axhline(y=0, color='k', linestyle='--', alpha=0.5)
-    axs[1, 1].set_xlabel('Nonconformity Threshold')
-    axs[1, 1].set_ylabel('TPR - FPR')
-    axs[1, 1].set_title('TPR-FPR Difference vs Threshold')
-    axs[1, 1].grid(True)
-    
-    plt.tight_layout()
-    plt.savefig(save_dir / f'nonconformity_abstention_analysis_severity_{severity}.png')
-    plt.close()
 
 def analyze_abstention_auc(tpr_rates: np.ndarray, fpr_rates: np.ndarray) -> float:
     """
@@ -465,6 +383,19 @@ def main():
         np.linspace(0.5, 1.0, 30)
     ])
 
+    # Create plot directories
+    plot_dirs = create_plot_dirs('plots')
+
+    # Storage for metrics across severities
+    metrics_data = {
+        'severities': [],
+        'coverages': [],
+        'set_sizes': [],
+        'abstention_rates': [],
+        'results_by_severity': {},
+        'set_sizes_by_severity': {}
+    }
+
     for severity in severity_levels:
         logger.info(f"Analyzing severity level {severity}")
         
@@ -499,7 +430,10 @@ def main():
         # Compute nonconformity scores for validation set
         val_nonconformity = compute_nonconformity_scores(val_softmax, val_labels)
         
-        # Analyze abstention
+        # First analyze prediction sets
+        prediction_stats = analyze_prediction_stats(prediction_sets, val_labels)
+        
+        # Then analyze abstention
         results = analyze_nonconformity_abstention(
             val_nonconformity,
             prediction_sets,
@@ -515,19 +449,28 @@ def main():
             min_abstention=0.01
         )
         
-        # Plot results
-        plot_nonconformity_analysis(results, severity)
+        # Calculate AUC for current severity
+        current_tpr_rates = np.array([m['tpr'] for m in results.values()])
+        current_fpr_rates = np.array([m['fpr'] for m in results.values()])
+        current_auc = analyze_abstention_auc(current_tpr_rates, current_fpr_rates)
         
-        # Analyze prediction sets
-        prediction_stats = analyze_prediction_stats(prediction_sets, val_labels)
-        plot_set_size_distribution(prediction_stats, severity)
+        # Store metrics for overall analysis
+        metrics_data['severities'].append(severity)
+        metrics_data['coverages'].append(coverage)
+        metrics_data['set_sizes'].append(avg_set_size)
+        metrics_data['abstention_rates'].append(best_metrics['abstention_rate'])
         
-        # Calculate AUC for abstention
-        tpr_rates = np.array([m['tpr'] for m in results.values()])
-        fpr_rates = np.array([m['fpr'] for m in results.values()])
-        auc = analyze_abstention_auc(tpr_rates, fpr_rates)
+        # Store results and set sizes for aggregate plots
+        metrics_data['results_by_severity'][severity] = {
+            'abstention_results': results,
+            'auc': current_auc  # Store the AUC for this severity
+        }
+        metrics_data['set_sizes_by_severity'][severity] = prediction_sets.sum(axis=1)
         
-        # Log all results
+        # Individual severity plots
+        plot_nonconformity_analysis(results, severity, plot_dirs['abstention'])
+        
+        # Log results for current severity
         logger.info(f"\nRAPS Results (Severity {severity}):")
         logger.info(f"Coverage: {coverage:.4f}")
         logger.info(f"Average Set Size: {avg_set_size:.4f}")
@@ -538,7 +481,26 @@ def main():
         logger.info(f"TPR: {best_metrics['tpr']:.4f}")
         logger.info(f"FPR: {best_metrics['fpr']:.4f}")
         logger.info(f"Abstention Rate: {best_metrics['abstention_rate']:.4f}")
-        logger.info(f"Abstention AUC: {auc:.4f}")
+        logger.info(f"Abstention AUC: {current_auc:.4f}")
+
+    # Generate aggregate plots
+    plot_metrics_vs_severity(
+        severities=metrics_data['severities'],
+        coverages=metrics_data['coverages'],
+        set_sizes=metrics_data['set_sizes'],
+        abstention_rates=metrics_data['abstention_rates'],
+        save_dir=plot_dirs['metrics']
+    )
+    
+    plot_roc_curves(
+        metrics_data['results_by_severity'], 
+        save_dir=plot_dirs['roc']
+    )
+    
+    plot_set_size_distribution(
+        metrics_data['set_sizes_by_severity'], 
+        save_dir=plot_dirs['set_sizes']
+    )
 
 if __name__ == '__main__':
     main()
