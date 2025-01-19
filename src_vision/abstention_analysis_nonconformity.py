@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 import timm
 from scipy import stats
 from data.cifar100 import setup_cifar100
-from data.corruptions import CorruptedCIFAR100Dataset, FogCorruption
+from data.corruptions import CorruptedCIFAR100Dataset, FogCorruption, SnowCorruption, RainCorruption, MotionBlurCorruption
 from utils.visualization import plot_metrics_vs_severity, plot_roc_curves, plot_set_size_distribution, create_plot_dirs, plot_abstention_analysis,plot_confidence_distributions, analyze_severity_impact
 from utils.model_utils import get_model_predictions
 from utils.logging_utils import setup_logging
@@ -273,19 +273,39 @@ def main():
     
     print(f"Abstention qhat from calibration: {abstention_qhat}")
     
-    # Results storage
-    results_by_severity = {}
-    severities, coverages, set_sizes, abstention_rates = [], [], [], []
-    set_sizes_by_severity = {}
-    softmax_scores_by_severity = {}
+    # Results storage for all corruptions
+    results_by_severity_fog = {}
+    results_by_severity_snow = {}
+    results_by_severity_rain = {}  # Add rain
+    results_by_severity_motionblur = {}  # Add motion blur
+    
+    severities_fog, coverages_fog, set_sizes_fog, abstention_rates_fog = [], [], [], []
+    severities_snow, coverages_snow, set_sizes_snow, abstention_rates_snow = [], [], [], []
+    severities_rain, coverages_rain, set_sizes_rain, abstention_rates_rain = [], [], [], []  # Add rain
+    severities_motionblur, coverages_motionblur, set_sizes_motionblur, abstention_rates_motionblur = [], [], [], []  # Add motion blur
+    
+    set_sizes_by_severity_fog = {}
+    set_sizes_by_severity_snow = {}
+    set_sizes_by_severity_rain = {}  # Add rain
+    set_sizes_by_severity_motionblur = {}  # Add motion blur
+    
+    softmax_scores_by_severity_fog = {}
+    softmax_scores_by_severity_snow = {}
+    softmax_scores_by_severity_rain = {}  # Add rain
+    softmax_scores_by_severity_motionblur = {}  # Add motion blur
     
     # Track uncertainty metrics
-    uncertainty_metrics_by_severity = {}
+    uncertainty_metrics_by_severity_fog = {}
+    uncertainty_metrics_by_severity_snow = {}
+    uncertainty_metrics_by_severity_rain = {}  # Add rain
+    uncertainty_metrics_by_severity_motionblur = {}  # Add motion blur
 
+    # Analyze both corruptions
     for severity in severity_levels:
         logger.info(f"\nAnalyzing severity {severity}")
         
-        # Create corrupted dataset and get predictions
+        # FOG ANALYSIS
+        logger.info("Processing Fog corruption...")
         corrupted_dataset = CorruptedCIFAR100Dataset(
             test_dataset, FogCorruption, severity=severity
         )
@@ -293,132 +313,309 @@ def main():
             corrupted_dataset, batch_size=128, 
             shuffle=False, num_workers=4, pin_memory=True
         )
-        test_probs, test_labels = get_model_predictions(model, corrupted_loader, device)
+        test_probs_fog, test_labels = get_model_predictions(model, corrupted_loader, device)
         
-        # Store softmax scores for distribution analysis
-        softmax_scores_by_severity[severity] = test_probs
-
-        # Compute uncertainty metrics
-        uncertainty_metrics = compute_uncertainty_metrics(test_probs)
-        uncertainty_metrics_by_severity[severity] = uncertainty_metrics
-
-
-        # Generate prediction sets
-        prediction_sets = get_prediction_sets(test_probs, conformal_qhat, k_reg, lam_reg)
-        metrics = evaluate_sets(prediction_sets, test_labels)
+        # Store fog results
+        softmax_scores_by_severity_fog[severity] = test_probs_fog
+        uncertainty_metrics = compute_uncertainty_metrics(test_probs_fog)
+        uncertainty_metrics_by_severity_fog[severity] = uncertainty_metrics
         
-        # Store set sizes for distribution plot
-        set_sizes_by_severity[severity] = prediction_sets.sum(axis=1)
+        # Generate prediction sets for fog
+        prediction_sets_fog = get_prediction_sets(test_probs_fog, conformal_qhat, k_reg, lam_reg)
+        metrics_fog = evaluate_sets(prediction_sets_fog, test_labels)
+        set_sizes_by_severity_fog[severity] = prediction_sets_fog.sum(axis=1)
         
-        # Compute nonconformity scores and use calibration's abstention_qhat
-        nonconf_scores = compute_nonconformity_scores(test_probs, test_labels)
-        true_labels_in_set = prediction_sets[np.arange(len(test_labels)), test_labels]
-        should_abstain = ~true_labels_in_set
+        # Compute abstention metrics for fog
+        nonconf_scores_fog = compute_nonconformity_scores(test_probs_fog, test_labels)
+        true_labels_in_set_fog = prediction_sets_fog[np.arange(len(test_labels)), test_labels]
+        should_abstain_fog = ~true_labels_in_set_fog
 
-        abstention_results = {}
+        # SNOW ANALYSIS
+        logger.info("Processing Snow corruption...")
+        corrupted_dataset = CorruptedCIFAR100Dataset(
+            test_dataset, SnowCorruption, severity=severity
+        )
+        corrupted_loader = DataLoader(
+            corrupted_dataset, batch_size=128, 
+            shuffle=False, num_workers=4, pin_memory=True
+        )
+        test_probs_snow, test_labels = get_model_predictions(model, corrupted_loader, device)
+        
+        # Store snow results
+        softmax_scores_by_severity_snow[severity] = test_probs_snow
+        uncertainty_metrics = compute_uncertainty_metrics(test_probs_snow)
+        uncertainty_metrics_by_severity_snow[severity] = uncertainty_metrics
+        
+        # Generate prediction sets for snow
+        prediction_sets_snow = get_prediction_sets(test_probs_snow, conformal_qhat, k_reg, lam_reg)
+        metrics_snow = evaluate_sets(prediction_sets_snow, test_labels)
+        set_sizes_by_severity_snow[severity] = prediction_sets_snow.sum(axis=1)
+        
+        # Compute abstention metrics for snow
+        nonconf_scores_snow = compute_nonconformity_scores(test_probs_snow, test_labels)
+        true_labels_in_set_snow = prediction_sets_snow[np.arange(len(test_labels)), test_labels]
+        should_abstain_snow = ~true_labels_in_set_snow
+
+        # Calculate abstention results for both
+        abstention_results_fog = {}
+        abstention_results_snow = {}
         for threshold in abstention_thresholds:
-            abstained = nonconf_scores > threshold
+            # Fog abstention
+            abstained_fog = nonconf_scores_fog > threshold
+            tp_fog = np.sum(abstained_fog & should_abstain_fog)
+            fp_fog = np.sum(abstained_fog & ~should_abstain_fog)
+            tn_fog = np.sum(~abstained_fog & ~should_abstain_fog)
+            fn_fog = np.sum(~abstained_fog & should_abstain_fog)
             
-            tp = np.sum(abstained & should_abstain)
-            fp = np.sum(abstained & ~should_abstain)
-            tn = np.sum(~abstained & ~should_abstain)
-            fn = np.sum(~abstained & should_abstain)
+            tpr_fog = tp_fog / (tp_fog + fn_fog) if (tp_fog + fn_fog) > 0 else 0
+            fpr_fog = fp_fog / (fp_fog + tn_fog) if (fp_fog + tn_fog) > 0 else 0
             
-            tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+            abstention_results_fog[threshold] = {
+                'tpr': tpr_fog,
+                'fpr': fpr_fog,
+                'abstention_rate': np.mean(abstained_fog)
+            }
             
-            abstention_results[threshold] = {
-                'tpr': tpr,
-                'fpr': fpr,
-                'abstention_rate': np.mean(abstained)
+            # Snow abstention
+            abstained_snow = nonconf_scores_snow > threshold
+            tp_snow = np.sum(abstained_snow & should_abstain_snow)
+            fp_snow = np.sum(abstained_snow & ~should_abstain_snow)
+            tn_snow = np.sum(~abstained_snow & ~should_abstain_snow)
+            fn_snow = np.sum(~abstained_snow & should_abstain_snow)
+            
+            tpr_snow = tp_snow / (tp_snow + fn_snow) if (tp_snow + fn_snow) > 0 else 0
+            fpr_snow = fp_snow / (fp_snow + tn_snow) if (fp_snow + tn_snow) > 0 else 0
+            
+            abstention_results_snow[threshold] = {
+                'tpr': tpr_snow,
+                'fpr': fpr_snow,
+                'abstention_rate': np.mean(abstained_snow)
             }
         
-        # Calculate AUC
-        auc = calculate_auc(abstention_results)
+        # Calculate AUC for both
+        auc_fog = calculate_auc(abstention_results_fog)
+        auc_snow = calculate_auc(abstention_results_snow)
         
-        # Store metrics for plotting
-        severities.append(severity)
-        coverages.append(metrics['coverage'])
-        set_sizes.append(metrics['avg_set_size'])
-        mean_abstention = np.mean([res['abstention_rate'] 
-                                for res in abstention_results.values()])
-        abstention_rates.append(mean_abstention)
+        # Store metrics for both
+        severities_fog.append(severity)
+        coverages_fog.append(metrics_fog['coverage'])
+        set_sizes_fog.append(metrics_fog['avg_set_size'])
+        abstention_rates_fog.append(np.mean([res['abstention_rate'] for res in abstention_results_fog.values()]))
         
-        # Store results
-        results_by_severity[severity] = {
-            **metrics,  # Include all metrics from evaluate_sets
+        severities_snow.append(severity)
+        coverages_snow.append(metrics_snow['coverage'])
+        set_sizes_snow.append(metrics_snow['avg_set_size'])
+        abstention_rates_snow.append(np.mean([res['abstention_rate'] for res in abstention_results_snow.values()]))
+        
+        # Store results for both
+        results_by_severity_fog[severity] = {
+            **metrics_fog,
             'abstention_qhat': abstention_qhat,
-            'abstention_results': abstention_results,
-            'auc': auc,
-            'prediction_sets': prediction_sets
+            'abstention_results': abstention_results_fog,
+            'auc': auc_fog,
+            'prediction_sets': prediction_sets_fog
         }
         
-        # Log results
-        logger.info(f"Coverage: {metrics['coverage']:.4f}")
-        logger.info(f"Average set size: {metrics['avg_set_size']:.4f}")
-        logger.info(f"Set size std: {metrics['std_set_size']:.4f}")
-        logger.info(f"AUC: {auc:.4f}")
-
-        # After your severity loop but before plotting
-        logger.info("\nAnalyzing distribution shift patterns...")
-        analyze_distribution_shift(softmax_scores_by_severity)
+        results_by_severity_snow[severity] = {
+            **metrics_snow,
+            'abstention_qhat': abstention_qhat,
+            'abstention_results': abstention_results_snow,
+            'auc': auc_snow,
+            'prediction_sets': prediction_sets_snow
+        }
         
-        # You can also store these metrics
-        shift_metrics = {}
-        for severity, scores in softmax_scores_by_severity.items():
-            # Get more detailed metrics
-            top_k_probs = np.sort(scores, axis=1)[:, -5:]  # Top 5 probabilities
-            entropy = -np.sum(scores * np.log(scores + 1e-7), axis=1)
+        # Log results for both
+        logger.info("\nFog Results:")
+        logger.info(f"Coverage: {metrics_fog['coverage']:.4f}")
+        logger.info(f"Average set size: {metrics_fog['avg_set_size']:.4f}")
+        logger.info(f"Set size std: {metrics_fog['std_set_size']:.4f}")
+        logger.info(f"AUC: {auc_fog:.4f}")
+        
+        logger.info("\nSnow Results:")
+        logger.info(f"Coverage: {metrics_snow['coverage']:.4f}")
+        logger.info(f"Average set size: {metrics_snow['avg_set_size']:.4f}")
+        logger.info(f"Set size std: {metrics_snow['std_set_size']:.4f}")
+        logger.info(f"AUC: {auc_snow:.4f}")
+
+        # RAIN ANALYSIS
+        logger.info("Processing Rain corruption...")
+        corrupted_dataset = CorruptedCIFAR100Dataset(
+            test_dataset, RainCorruption, severity=severity
+        )
+        corrupted_loader = DataLoader(
+            corrupted_dataset, batch_size=128, 
+            shuffle=False, num_workers=4, pin_memory=True
+        )
+        test_probs_rain, test_labels = get_model_predictions(model, corrupted_loader, device)
+        
+        # Store rain results
+        softmax_scores_by_severity_rain[severity] = test_probs_rain
+        uncertainty_metrics = compute_uncertainty_metrics(test_probs_rain)
+        uncertainty_metrics_by_severity_rain[severity] = uncertainty_metrics
+        
+        # Generate prediction sets for rain
+        prediction_sets_rain = get_prediction_sets(test_probs_rain, conformal_qhat, k_reg, lam_reg)
+        metrics_rain = evaluate_sets(prediction_sets_rain, test_labels)
+        set_sizes_by_severity_rain[severity] = prediction_sets_rain.sum(axis=1)
+        
+        # Compute abstention metrics for rain
+        nonconf_scores_rain = compute_nonconformity_scores(test_probs_rain, test_labels)
+        true_labels_in_set_rain = prediction_sets_rain[np.arange(len(test_labels)), test_labels]
+        should_abstain_rain = ~true_labels_in_set_rain
+        
+        # Add rain abstention results
+        abstention_results_rain = {}
+        for threshold in abstention_thresholds:
+            abstained_rain = nonconf_scores_rain > threshold
+            tp_rain = np.sum(abstained_rain & should_abstain_rain)
+            fp_rain = np.sum(abstained_rain & ~should_abstain_rain)
+            tn_rain = np.sum(~abstained_rain & ~should_abstain_rain)
+            fn_rain = np.sum(~abstained_rain & should_abstain_rain)
             
-            shift_metrics[severity] = {
-                'top_k_probs': np.mean(top_k_probs, axis=0),
-                'entropy_mean': np.mean(entropy),
-                'entropy_std': np.std(entropy),
-                'max_prob_mean': np.mean(np.max(scores, axis=1))
+            tpr_rain = tp_rain / (tp_rain + fn_rain) if (tp_rain + fn_rain) > 0 else 0
+            fpr_rain = fp_rain / (fp_rain + tn_rain) if (fp_rain + tn_rain) > 0 else 0
+            
+            abstention_results_rain[threshold] = {
+                'tpr': tpr_rain,
+                'fpr': fpr_rain,
+                'abstention_rate': np.mean(abstained_rain)
             }
+        
+        # Calculate AUC for rain
+        auc_rain = calculate_auc(abstention_results_rain)
+        
+        # Store metrics for rain
+        severities_rain.append(severity)
+        coverages_rain.append(metrics_rain['coverage'])
+        set_sizes_rain.append(metrics_rain['avg_set_size'])
+        abstention_rates_rain.append(np.mean([res['abstention_rate'] for res in abstention_results_rain.values()]))
+        
+        # Store rain results
+        results_by_severity_rain[severity] = {
+            **metrics_rain,
+            'abstention_qhat': abstention_qhat,
+            'abstention_results': abstention_results_rain,
+            'auc': auc_rain,
+            'prediction_sets': prediction_sets_rain
+        }
+        
+        # Log rain results
+        logger.info("\nRain Results:")
+        logger.info(f"Coverage: {metrics_rain['coverage']:.4f}")
+        logger.info(f"Average set size: {metrics_rain['avg_set_size']:.4f}")
+        logger.info(f"Set size std: {metrics_rain['std_set_size']:.4f}")
+        logger.info(f"AUC: {auc_rain:.4f}")
+
+        # MOTION BLUR ANALYSIS
+        logger.info("Processing Motion Blur corruption...")
+        corrupted_dataset = CorruptedCIFAR100Dataset(
+            test_dataset, MotionBlurCorruption, severity=severity
+        )
+        corrupted_loader = DataLoader(
+            corrupted_dataset, batch_size=128, 
+            shuffle=False, num_workers=4, pin_memory=True
+        )
+        test_probs_motionblur, test_labels = get_model_predictions(model, corrupted_loader, device)
+        
+        # Store motion blur results
+        softmax_scores_by_severity_motionblur[severity] = test_probs_motionblur
+        uncertainty_metrics = compute_uncertainty_metrics(test_probs_motionblur)
+        uncertainty_metrics_by_severity_motionblur[severity] = uncertainty_metrics
+        
+        # Generate prediction sets for motion blur
+        prediction_sets_motionblur = get_prediction_sets(test_probs_motionblur, conformal_qhat, k_reg, lam_reg)
+        metrics_motionblur = evaluate_sets(prediction_sets_motionblur, test_labels)
+        set_sizes_by_severity_motionblur[severity] = prediction_sets_motionblur.sum(axis=1)
+        
+        # Compute abstention metrics for motion blur
+        nonconf_scores_motionblur = compute_nonconformity_scores(test_probs_motionblur, test_labels)
+        true_labels_in_set_motionblur = prediction_sets_motionblur[np.arange(len(test_labels)), test_labels]
+        should_abstain_motionblur = ~true_labels_in_set_motionblur
+        
+        # Add motion blur abstention results
+        abstention_results_motionblur = {}
+        for threshold in abstention_thresholds:
+            abstained_motionblur = nonconf_scores_motionblur > threshold
+            tp_motionblur = np.sum(abstained_motionblur & should_abstain_motionblur)
+            fp_motionblur = np.sum(abstained_motionblur & ~should_abstain_motionblur)
+            tn_motionblur = np.sum(~abstained_motionblur & ~should_abstain_motionblur)
+            fn_motionblur = np.sum(~abstained_motionblur & should_abstain_motionblur)
+            
+            tpr_motionblur = tp_motionblur / (tp_motionblur + fn_motionblur) if (tp_motionblur + fn_motionblur) > 0 else 0
+            fpr_motionblur = fp_motionblur / (fp_motionblur + tn_motionblur) if (fp_motionblur + tn_motionblur) > 0 else 0
+            
+            abstention_results_motionblur[threshold] = {
+                'tpr': tpr_motionblur,
+                'fpr': fpr_motionblur,
+                'abstention_rate': np.mean(abstained_motionblur)
+            }
+        
+        # Calculate AUC for motion blur
+        auc_motionblur = calculate_auc(abstention_results_motionblur)
+        
+        # Store metrics for motion blur
+        severities_motionblur.append(severity)
+        coverages_motionblur.append(metrics_motionblur['coverage'])
+        set_sizes_motionblur.append(metrics_motionblur['avg_set_size'])
+        abstention_rates_motionblur.append(np.mean([res['abstention_rate'] for res in abstention_results_motionblur.values()]))
+        
+        # Store motion blur results
+        results_by_severity_motionblur[severity] = {
+            **metrics_motionblur,
+            'abstention_qhat': abstention_qhat,
+            'abstention_results': abstention_results_motionblur,
+            'auc': auc_motionblur,
+            'prediction_sets': prediction_sets_motionblur
+        }
+        
+        # Log motion blur results
+        logger.info("\nMotion Blur Results:")
+        logger.info(f"Coverage: {metrics_motionblur['coverage']:.4f}")
+        logger.info(f"Average set size: {metrics_motionblur['avg_set_size']:.4f}")
+        logger.info(f"Set size std: {metrics_motionblur['std_set_size']:.4f}")
+        logger.info(f"AUC: {auc_motionblur:.4f}")
     
-    # Create plot directories and generate visualizations
+    # Create plot directories and update visualization calls
     plot_dirs = create_plot_dirs('plots_vision')
     
-    # Add new visualization calls right after creating plot directories
-    plot_confidence_distributions(
-        softmax_scores_by_severity=softmax_scores_by_severity,
-        set_sizes_by_severity=set_sizes_by_severity,  # Add this
-        save_dir=plot_dirs['metrics']
-    )
-    analyze_severity_impact(
-        softmax_scores_by_severity=softmax_scores_by_severity,
-        conformal_qhat=conformal_qhat,
-        k_reg=k_reg,
-        lam_reg=lam_reg,
-        save_dir=plot_dirs['metrics']
-    )
-
-
+    # Generate visualizations for all corruptions
     plot_metrics_vs_severity(
-        severities=severities,
-        coverages=coverages,
-        set_sizes=set_sizes,
-        abstention_rates=abstention_rates,
+        severities=[severities_fog, severities_snow, severities_rain, severities_motionblur],
+        coverages=[coverages_fog, coverages_snow, coverages_rain, coverages_motionblur],
+        set_sizes=[set_sizes_fog, set_sizes_snow, set_sizes_rain, set_sizes_motionblur],
+        abstention_rates=[abstention_rates_fog, abstention_rates_snow, abstention_rates_rain, abstention_rates_motionblur],
+        labels=['Fog', 'Snow', 'Rain', 'Motion Blur'],
         save_dir=plot_dirs['metrics']
     )
     
-    plot_roc_curves(results_by_severity, save_dir=plot_dirs['roc'])
-    plot_set_size_distribution(set_sizes_by_severity, save_dir=plot_dirs['set_sizes'])
+    plot_roc_curves(
+        {
+            'fog': results_by_severity_fog, 
+            'snow': results_by_severity_snow,
+            'rain': results_by_severity_rain,
+            'motionblur': results_by_severity_motionblur
+        }, 
+        save_dir=plot_dirs['roc']
+    )
     
-    # Generate abstention analysis plots
+    plot_set_size_distribution(
+        {
+            'fog': set_sizes_by_severity_fog, 
+            'snow': set_sizes_by_severity_snow,
+            'rain': set_sizes_by_severity_rain,
+            'motionblur': set_sizes_by_severity_motionblur
+        },
+        save_dir=plot_dirs['set_sizes']
+    )
+    
+    # Generate abstention analysis plots for all
     for severity in severity_levels:
-        results = results_by_severity[severity]['abstention_results']
-        thresholds = sorted(results.keys())
-        tpr_rates = [results[t]['tpr'] for t in thresholds]
-        fpr_rates = [results[t]['fpr'] for t in thresholds]
-        current_abstention_rates = [results[t]['abstention_rate'] for t in thresholds]
-        
         plot_abstention_analysis(
-            thresholds=np.array(thresholds),
-            tpr_rates=np.array(tpr_rates),
-            fpr_rates=np.array(fpr_rates),
-            abstention_rates=np.array(current_abstention_rates),
+            thresholds=abstention_thresholds,
+            results_fog=results_by_severity_fog[severity]['abstention_results'],
+            results_snow=results_by_severity_snow[severity]['abstention_results'],
+            results_rain=results_by_severity_rain[severity]['abstention_results'],
+            results_motionblur=results_by_severity_motionblur[severity]['abstention_results'],
             severity=severity,
             save_dir=plot_dirs['abstention']
         )

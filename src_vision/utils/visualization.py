@@ -21,13 +21,14 @@ def create_plot_dirs(base_dir: str = 'plots_vision') -> Dict[str, Path]:
     return dirs
 
 def plot_metrics_vs_severity(
-    severities: List[int],
-    coverages: List[float],
-    set_sizes: List[float],
-    abstention_rates: List[float],
+    severities: List[List[int]],  # [[fog_severities], [snow_severities]]
+    coverages: List[List[float]], # [[fog_coverages], [snow_coverages]]
+    set_sizes: List[List[float]], # [[fog_set_sizes], [snow_set_sizes]]
+    abstention_rates: List[List[float]], # [[fog_rates], [snow_rates]]
+    labels: List[str] = ['Fog', 'Snow'],
     save_dir: str = 'plots_vision/metrics'
 ) -> None:
-    """Plot key metrics against severity levels."""
+    """Plot key metrics against severity levels for both corruptions."""
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
@@ -37,9 +38,10 @@ def plot_metrics_vs_severity(
     
     # Coverage plot
     plt.subplot(1, 3, 1)
-    plt.plot(severities, coverages, 'o-', label='Empirical Coverage', linewidth=2)
+    for i, (sev, cov, label) in enumerate(zip(severities, coverages, labels)):
+        plt.plot(sev, cov, 'o-', label=f'{label} Coverage', linewidth=2)
     plt.axhline(y=0.9, color='r', linestyle='--', label='Target (90%)')
-    plt.xlabel('Fog Severity')
+    plt.xlabel('Severity')
     plt.ylabel('Coverage')
     plt.title('Coverage vs Severity')
     plt.grid(True)
@@ -47,86 +49,104 @@ def plot_metrics_vs_severity(
     
     # Set size plot
     plt.subplot(1, 3, 2)
-    plt.plot(severities, set_sizes, 'o-', linewidth=2)
-    plt.xlabel('Fog Severity')
+    for i, (sev, sizes, label) in enumerate(zip(severities, set_sizes, labels)):
+        plt.plot(sev, sizes, 'o-', label=f'{label}', linewidth=2)
+    plt.xlabel('Severity')
     plt.ylabel('Average Set Size')
     plt.title('Set Size vs Severity')
     plt.grid(True)
+    plt.legend()
     
     # Abstention rate plot
     plt.subplot(1, 3, 3)
-    plt.plot(severities, abstention_rates, 'o-', linewidth=2)
-    plt.xlabel('Fog Severity')
+    for i, (sev, rates, label) in enumerate(zip(severities, abstention_rates, labels)):
+        plt.plot(sev, rates, 'o-', label=f'{label}', linewidth=2)
+    plt.xlabel('Severity')
     plt.ylabel('Abstention Rate')
     plt.title('Abstention Rate vs Severity')
     plt.grid(True)
+    plt.legend()
     
     plt.tight_layout()
     plt.savefig(save_dir / 'metrics_vs_severity.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 def plot_roc_curves(
-    results_by_severity: Dict[int, Dict],
+    results: Dict[str, Dict[int, Dict]],  # {'fog': results_fog, 'snow': results_snow, 'rain': results_rain}
     save_dir: str = 'plots_vision/roc'
 ) -> None:
-    """Plot ROC curves for each severity level."""
+    """Plot ROC curves for each severity level and corruption type."""
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
     plt.style.use('seaborn')
-    plt.figure(figsize=(8, 8))
+    plt.figure(figsize=(10, 8))
     
-    colors = plt.cm.viridis(np.linspace(0, 1, len(results_by_severity)))
+    # Use different color maps for each corruption
+    colors_fog = plt.cm.Blues(np.linspace(0.3, 1, 5))
+    colors_snow = plt.cm.Oranges(np.linspace(0.3, 1, 5))
+    colors_rain = plt.cm.Greens(np.linspace(0.3, 1, 5))  # Add rain colors
+    colors_motionblur = plt.cm.Purples(np.linspace(0.3, 1, 5))  # Add motion blur colors
     
-    for (severity, severity_results), color in zip(sorted(results_by_severity.items()), colors):
-        # Get abstention results for this severity
-        abstention_results = severity_results['abstention_results']
-        thresholds = sorted(abstention_results.keys())
-        
-        # Extract TPR and FPR values
-        fpr_rates = [abstention_results[t]['fpr'] for t in thresholds]
-        tpr_rates = [abstention_results[t]['tpr'] for t in thresholds]
-        auc = severity_results['auc']
-        
-        plt.plot(fpr_rates, tpr_rates, color=color, linewidth=2,
-                label=f'Severity {severity} (AUC = {auc:.3f})')
+    # Plot curves for each corruption type
+    for corruption, colors in [('fog', colors_fog), ('snow', colors_snow), ('rain', colors_rain), ('motionblur', colors_motionblur)]:
+        for severity, color in zip(sorted(results[corruption].keys()), colors):
+            res = results[corruption][severity]['abstention_results']
+            thresholds = sorted(res.keys())
+            fpr_rates = [res[t]['fpr'] for t in thresholds]
+            tpr_rates = [res[t]['tpr'] for t in thresholds]
+            auc = results[corruption][severity]['auc']
+            
+            plt.plot(fpr_rates, tpr_rates, color=color, linewidth=2,
+                    label=f'{corruption.capitalize()} Severity {severity} (AUC = {auc:.3f})')
     
     plt.plot([0, 1], [0, 1], 'k--', label='Random')
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('ROC Curves by Severity Level')
+    plt.title('ROC Curves by Severity Level and Corruption Type')
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True)
     
     plt.tight_layout()
     plt.savefig(save_dir / 'roc_curves.png', dpi=300, bbox_inches='tight')
     plt.close()
-    
 
 def plot_set_size_distribution(
-    set_sizes_by_severity: Dict[int, np.ndarray],
+    set_sizes_dict: Dict[str, Dict[int, np.ndarray]],  # {'fog': {...}, 'snow': {...}}
     save_dir: str = 'plots_vision/set_sizes'
 ) -> None:
-    """Plot set size distributions for each severity level."""
+    """Plot set size distributions for each severity level and corruption type."""
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
     plt.style.use('seaborn')
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(12, 6))
     
-    colors = plt.cm.viridis(np.linspace(0, 1, len(set_sizes_by_severity)))
+    # Different color schemes for fog and snow
+    colors_fog = plt.cm.Blues(np.linspace(0.3, 1, 5))
+    colors_snow = plt.cm.Oranges(np.linspace(0.3, 1, 5))
     
-    for severity, color in zip(sorted(set_sizes_by_severity.keys()), colors):
-        set_sizes = set_sizes_by_severity[severity]
+    # Plot fog distributions
+    for severity, color in zip(sorted(set_sizes_dict['fog'].keys()), colors_fog):
+        set_sizes = set_sizes_dict['fog'][severity]
         unique_sizes, counts = np.unique(set_sizes, return_counts=True)
         percentages = (counts / len(set_sizes)) * 100
         
         plt.plot(unique_sizes, percentages, 'o-', color=color, linewidth=2,
-                label=f'Severity {severity}')
+                label=f'Fog Severity {severity}')
+    
+    # Plot snow distributions
+    for severity, color in zip(sorted(set_sizes_dict['snow'].keys()), colors_snow):
+        set_sizes = set_sizes_dict['snow'][severity]
+        unique_sizes, counts = np.unique(set_sizes, return_counts=True)
+        percentages = (counts / len(set_sizes)) * 100
+        
+        plt.plot(unique_sizes, percentages, 'o-', color=color, linewidth=2,
+                label=f'Snow Severity {severity}')
     
     plt.xlabel('Prediction Set Size')
     plt.ylabel('Percentage of Samples (%)')
-    plt.title('Set Size Distribution by Severity Level')
+    plt.title('Set Size Distribution by Severity Level and Corruption Type')
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True)
     
@@ -136,13 +156,14 @@ def plot_set_size_distribution(
 
 def plot_abstention_analysis(
     thresholds: np.ndarray,
-    tpr_rates: np.ndarray,
-    fpr_rates: np.ndarray,
-    abstention_rates: np.ndarray,
+    results_fog: Dict,
+    results_snow: Dict,
+    results_rain: Dict,  # Add rain results
+    results_motionblur: Dict,  # Add motion blur
     severity: int,
     save_dir: str = 'plots_vision/abstention'
 ) -> None:
-    """Plot abstention analysis metrics."""
+    """Plot abstention analysis metrics for all corruptions."""
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
@@ -150,24 +171,55 @@ def plot_abstention_analysis(
     fig, axs = plt.subplots(2, 2, figsize=(15, 12))
     fig.suptitle(f'Abstention Analysis (Severity {severity})', fontsize=14)
     
+    # Extract metrics for all corruptions
+    tpr_fog = [results_fog[t]['tpr'] for t in thresholds]
+    fpr_fog = [results_fog[t]['fpr'] for t in thresholds]
+    abs_fog = [results_fog[t]['abstention_rate'] for t in thresholds]
+    
+    tpr_snow = [results_snow[t]['tpr'] for t in thresholds]
+    fpr_snow = [results_snow[t]['fpr'] for t in thresholds]
+    abs_snow = [results_snow[t]['abstention_rate'] for t in thresholds]
+    
+    tpr_rain = [results_rain[t]['tpr'] for t in thresholds]
+    fpr_rain = [results_rain[t]['fpr'] for t in thresholds]
+    abs_rain = [results_rain[t]['abstention_rate'] for t in thresholds]
+    
+    tpr_motionblur = [results_motionblur[t]['tpr'] for t in thresholds]
+    fpr_motionblur = [results_motionblur[t]['fpr'] for t in thresholds]
+    abs_motionblur = [results_motionblur[t]['abstention_rate'] for t in thresholds]
+    
     # ROC curve
-    axs[0, 0].plot(fpr_rates, tpr_rates, 'o-', linewidth=2)
+    axs[0, 0].plot(fpr_fog, tpr_fog, 'b-', linewidth=2, label='Fog')
+    axs[0, 0].plot(fpr_snow, tpr_snow, 'orange', linewidth=2, label='Snow')
+    axs[0, 0].plot(fpr_rain, tpr_rain, 'g-', linewidth=2, label='Rain')
+    axs[0, 0].plot(fpr_motionblur, tpr_motionblur, 'purple', linewidth=2, label='Motion Blur')
     axs[0, 0].plot([0, 1], [0, 1], 'k--', alpha=0.5)
     axs[0, 0].set_xlabel('False Positive Rate')
     axs[0, 0].set_ylabel('True Positive Rate')
     axs[0, 0].set_title('ROC Curve')
     axs[0, 0].grid(True)
+    axs[0, 0].legend()
     
     # Abstention rate vs threshold
-    axs[0, 1].plot(thresholds, abstention_rates, 'o-', linewidth=2)
+    axs[0, 1].plot(thresholds, abs_fog, 'b-', linewidth=2, label='Fog')
+    axs[0, 1].plot(thresholds, abs_snow, 'orange', linewidth=2, label='Snow')
+    axs[0, 1].plot(thresholds, abs_rain, 'g-', linewidth=2, label='Rain')
+    axs[0, 1].plot(thresholds, abs_motionblur, 'purple', linewidth=2, label='Motion Blur')
     axs[0, 1].set_xlabel('Threshold')
     axs[0, 1].set_ylabel('Abstention Rate')
     axs[0, 1].set_title('Abstention Rate vs Threshold')
     axs[0, 1].grid(True)
+    axs[0, 1].legend()
     
     # TPR/FPR vs threshold
-    axs[1, 0].plot(thresholds, tpr_rates, 'o-', linewidth=2, label='TPR')
-    axs[1, 0].plot(thresholds, fpr_rates, 'o-', linewidth=2, label='FPR')
+    axs[1, 0].plot(thresholds, tpr_fog, 'b-', linewidth=2, label='TPR (Fog)')
+    axs[1, 0].plot(thresholds, fpr_fog, 'b--', linewidth=2, label='FPR (Fog)')
+    axs[1, 0].plot(thresholds, tpr_snow, 'orange', linewidth=2, label='TPR (Snow)')
+    axs[1, 0].plot(thresholds, fpr_snow, 'orange', linestyle='--', linewidth=2, label='FPR (Snow)')
+    axs[1, 0].plot(thresholds, tpr_rain, 'g-', linewidth=2, label='TPR (Rain)')
+    axs[1, 0].plot(thresholds, fpr_rain, 'g--', linewidth=2, label='FPR (Rain)')
+    axs[1, 0].plot(thresholds, tpr_motionblur, 'purple', linewidth=2, label='TPR (Motion Blur)')
+    axs[1, 0].plot(thresholds, fpr_motionblur, 'purple', linestyle='--', linewidth=2, label='FPR (Motion Blur)')
     axs[1, 0].set_xlabel('Threshold')
     axs[1, 0].set_ylabel('Rate')
     axs[1, 0].set_title('TPR and FPR vs Threshold')
@@ -175,8 +227,14 @@ def plot_abstention_analysis(
     axs[1, 0].legend()
     
     # TPR-FPR difference
-    diff_rates = tpr_rates - fpr_rates
-    axs[1, 1].plot(thresholds, diff_rates, 'o-', linewidth=2)
+    diff_fog = np.array(tpr_fog) - np.array(fpr_fog)
+    diff_snow = np.array(tpr_snow) - np.array(fpr_snow)
+    diff_rain = np.array(tpr_rain) - np.array(fpr_rain)
+    diff_motionblur = np.array(tpr_motionblur) - np.array(fpr_motionblur)
+    axs[1, 1].plot(thresholds, diff_fog, 'b-', linewidth=2, label='Fog')
+    axs[1, 1].plot(thresholds, diff_snow, 'orange', linewidth=2, label='Snow')
+    axs[1, 1].plot(thresholds, diff_rain, 'g-', linewidth=2, label='Rain')
+    axs[1, 1].plot(thresholds, diff_motionblur, 'purple', linewidth=2, label='Motion Blur')
     axs[1, 1].axhline(y=0, color='k', linestyle='--', alpha=0.5)
     axs[1, 1].set_xlabel('Threshold')
     axs[1, 1].set_ylabel('TPR - FPR')
