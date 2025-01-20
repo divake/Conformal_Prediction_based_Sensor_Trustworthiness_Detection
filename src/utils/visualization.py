@@ -31,12 +31,19 @@ def plot_metrics_vs_severity(
     plt.style.use('seaborn')
     plt.figure(figsize=(15, 5))
     
-    colors = ['b', 'r']  # Blue for occlusion, red for rain
+    # Colors for each corruption type
+    colors = {
+        'occlusion': 'b',
+        'rain': 'r',
+        'fog': 'g',
+        'blur': 'm',
+        'snow': 'c'
+    }
     
     # Coverage plot
     plt.subplot(1, 3, 1)
     for i, (sev, cov, label) in enumerate(zip(severities, coverages, labels)):
-        plt.plot(sev, cov, f'o-', color=colors[i], label=label.capitalize(), linewidth=2)
+        plt.plot(sev, cov, f'o-', color=colors[label.lower()], label=label.capitalize(), linewidth=2)
     plt.axhline(y=0.9, color='k', linestyle='--', label='Target (90%)')
     plt.xlabel('Severity')
     plt.ylabel('Coverage')
@@ -47,7 +54,7 @@ def plot_metrics_vs_severity(
     # Set size plot
     plt.subplot(1, 3, 2)
     for i, (sev, size, label) in enumerate(zip(severities, set_sizes, labels)):
-        plt.plot(sev, size, f'o-', color=colors[i], label=label.capitalize(), linewidth=2)
+        plt.plot(sev, size, f'o-', color=colors[label.lower()], label=label.capitalize(), linewidth=2)
     plt.xlabel('Severity')
     plt.ylabel('Average Set Size')
     plt.title('Set Size vs Severity')
@@ -57,7 +64,7 @@ def plot_metrics_vs_severity(
     # Abstention rate plot
     plt.subplot(1, 3, 3)
     for i, (sev, rate, label) in enumerate(zip(severities, abstention_rates, labels)):
-        plt.plot(sev, rate, f'o-', color=colors[i], label=label.capitalize(), linewidth=2)
+        plt.plot(sev, rate, f'o-', color=colors[label.lower()], label=label.capitalize(), linewidth=2)
     plt.xlabel('Severity')
     plt.ylabel('Abstention Rate')
     plt.title('Abstention Rate vs Severity')
@@ -81,7 +88,10 @@ def plot_roc_curves(
     
     colors = {
         'occlusion': plt.cm.Blues(np.linspace(0.3, 1, 5)),
-        'rain': plt.cm.Reds(np.linspace(0.3, 1, 5))
+        'rain': plt.cm.Reds(np.linspace(0.3, 1, 5)),
+        'fog': plt.cm.Greens(np.linspace(0.3, 1, 5)),
+        'blur': plt.cm.Purples(np.linspace(0.3, 1, 5)),
+        'snow': plt.cm.YlGn(np.linspace(0.3, 1, 5))
     }
     
     for corruption_name, results in results_by_corruption.items():
@@ -119,7 +129,10 @@ def plot_set_size_distribution(
     
     colors = {
         'occlusion': plt.cm.Blues(np.linspace(0.3, 1, 5)),
-        'rain': plt.cm.Reds(np.linspace(0.3, 1, 5))
+        'rain': plt.cm.Reds(np.linspace(0.3, 1, 5)),
+        'fog': plt.cm.Greens(np.linspace(0.3, 1, 5)),
+        'blur': plt.cm.Purples(np.linspace(0.3, 1, 5)),
+        'snow': plt.cm.YlGn(np.linspace(0.3, 1, 5))
     }
     
     for corruption_name, set_sizes_by_severity in set_sizes_by_corruption.items():
@@ -150,47 +163,75 @@ def plot_nonconformity_analysis(
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    thresholds = sorted(list(results.keys()))
-    tpr_rates = [results[t]['tpr'] for t in thresholds]
-    fpr_rates = [results[t]['fpr'] for t in thresholds]
-    abstention_rates = [results[t]['abstention_rate'] for t in thresholds]
+    # Colors for each corruption type
+    colors = {
+        'occlusion': 'b',
+        'rain': 'r',
+        'fog': 'g',
+        'blur': 'm',
+        'snow': 'c'
+    }
     
+    plt.style.use('seaborn')
     fig, axs = plt.subplots(2, 2, figsize=(15, 12))
     fig.suptitle(f'Nonconformity-based Abstention Analysis (Severity {severity})', fontsize=14)
     
-    # ROC curve
-    axs[0, 0].plot(fpr_rates, tpr_rates, 'o-')
+    # Plot for each corruption type
+    for corruption_name, corruption_results in results.items():
+        thresholds = sorted(list(corruption_results.keys()))
+        tpr_rates = [corruption_results[t]['tpr'] for t in thresholds]
+        fpr_rates = [corruption_results[t]['fpr'] for t in thresholds]
+        abstention_rates = [corruption_results[t]['abstention_rate'] for t in thresholds]
+        
+        # ROC curve
+        axs[0, 0].plot(fpr_rates, tpr_rates, f'{colors[corruption_name]}-', 
+                      label=corruption_name.capitalize(), linewidth=2)
+        
+        # Abstention rate
+        axs[0, 1].plot(thresholds, abstention_rates, f'{colors[corruption_name]}-',
+                      label=corruption_name.capitalize(), linewidth=2)
+        
+        # TPR and FPR vs threshold
+        axs[1, 0].plot(thresholds, tpr_rates, f'{colors[corruption_name]}-',
+                      label=f'TPR ({corruption_name.capitalize()})', linewidth=2)
+        axs[1, 0].plot(thresholds, fpr_rates, f'{colors[corruption_name]}--',
+                      label=f'FPR ({corruption_name.capitalize()})', linewidth=2)
+        
+        # TPR-FPR difference
+        diff_rates = [tpr - fpr for tpr, fpr in zip(tpr_rates, fpr_rates)]
+        axs[1, 1].plot(thresholds, diff_rates, f'{colors[corruption_name]}-',
+                      label=corruption_name.capitalize(), linewidth=2)
+    
+    # ROC curve settings
     axs[0, 0].plot([0, 1], [0, 1], 'k--', alpha=0.5)
     axs[0, 0].set_xlabel('False Positive Rate (FPR)')
     axs[0, 0].set_ylabel('True Positive Rate (TPR)')
     axs[0, 0].set_title('ROC Curve')
     axs[0, 0].grid(True)
+    axs[0, 0].legend()
     
-    # Abstention rate
-    axs[0, 1].plot(thresholds, abstention_rates, 'o-')
+    # Abstention rate settings
     axs[0, 1].set_xlabel('Nonconformity Threshold')
     axs[0, 1].set_ylabel('Abstention Rate')
     axs[0, 1].set_title('Abstention Rate vs Threshold')
     axs[0, 1].grid(True)
+    axs[0, 1].legend()
     
-    # TPR and FPR vs threshold
-    axs[1, 0].plot(thresholds, tpr_rates, 'o-', label='TPR')
-    axs[1, 0].plot(thresholds, fpr_rates, 'o-', label='FPR')
+    # TPR and FPR vs threshold settings
     axs[1, 0].set_xlabel('Threshold')
     axs[1, 0].set_ylabel('Rate')
     axs[1, 0].set_title('TPR and FPR vs Threshold')
     axs[1, 0].grid(True)
     axs[1, 0].legend()
     
-    # TPR-FPR difference
-    diff_rates = [tpr - fpr for tpr, fpr in zip(tpr_rates, fpr_rates)]
-    axs[1, 1].plot(thresholds, diff_rates, 'o-')
+    # TPR-FPR difference settings
     axs[1, 1].axhline(y=0, color='k', linestyle='--', alpha=0.5)
     axs[1, 1].set_xlabel('Threshold')
     axs[1, 1].set_ylabel('TPR - FPR')
     axs[1, 1].set_title('TPR-FPR Difference')
     axs[1, 1].grid(True)
+    axs[1, 1].legend()
     
     plt.tight_layout()
-    plt.savefig(save_dir / f'nonconformity_abstention_analysis_severity_{severity}.png')
+    plt.savefig(save_dir / f'nonconformity_abstention_analysis_severity_{severity}.png', dpi=300, bbox_inches='tight')
     plt.close()

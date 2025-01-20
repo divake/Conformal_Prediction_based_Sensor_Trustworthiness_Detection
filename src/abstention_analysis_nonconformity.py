@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 from scipy.stats import binom
 from conformal_prediction import conformal_prediction, get_softmax_predictions, create_dataloader
-from data.corruptions import CorruptedModelNet40Dataset, OcclusionCorruption, RainCorruption  # Updated import
+from data.corruptions import CorruptedModelNet40Dataset, OcclusionCorruption, RainCorruption, FogCorruption, BlurCorruption, SnowCorruption
 from config import Config
 from data.dataset import ModelNet40Dataset
 from models.point_transformer_v2 import PointTransformerV2
@@ -363,7 +363,10 @@ def main():
     # Analysis parameters
     corruptions = {
         'occlusion': OcclusionCorruption,
-        'rain': RainCorruption
+        'rain': RainCorruption,
+        'fog': FogCorruption,
+        'blur': BlurCorruption,
+        'snow': SnowCorruption
     }
     
     severity_levels = [1, 2, 3, 4, 5]
@@ -402,18 +405,21 @@ def main():
         for corruption_name in corruptions.keys()
     }
 
-    for corruption_name, corruption_type in corruptions.items():
-        logger.info(f"\nAnalyzing {corruption_name} corruption")
+    # Process each severity level
+    for severity in severity_levels:
+        logger.info(f"\nProcessing severity level {severity}")
+        severity_results = {}  # Store results for all corruptions at this severity
         
-        for severity in severity_levels:
-            logger.info(f"\n{'='*50}")
-            logger.info(f"Analyzing {corruption_name} severity level {severity}")
+        # Process each corruption type
+        for corruption_name, corruption_type in corruptions.items():
+            logger.info(f"\nAnalyzing {corruption_name} corruption at severity {severity}")
             
             # Create corrupted dataset
             corrupted_dataset = CorruptedModelNet40Dataset(
                 base_dataset=test_dataset,
                 corruption_type=corruption_type,
-                severity=severity
+                severity=severity,
+                seed=42
             )
             
             corrupted_loader = DataLoader(
@@ -433,7 +439,7 @@ def main():
                 val_softmax, val_labels,
                 k_reg=5,
                 lam_reg=0.01,
-                alpha=0.1  # Fixed alpha without adjustment
+                alpha=0.1
             )
             
             # Compute nonconformity scores for validation set
@@ -453,7 +459,7 @@ def main():
             
             # Find optimal threshold with constraints from results
             best_threshold, best_metrics = find_abstention_threshold(
-                results,  # Now passing the results dictionary directly
+                results,
                 target_coverage=0.9,
                 min_abstention=0.01
             )
@@ -472,12 +478,12 @@ def main():
             # Store results and set sizes for aggregate plots
             metrics_data[corruption_name]['results_by_severity'][severity] = {
                 'abstention_results': results,
-                'auc': current_auc  # Store the AUC for this severity
+                'auc': current_auc
             }
             metrics_data[corruption_name]['set_sizes_by_severity'][severity] = prediction_sets.sum(axis=1)
             
-            # Individual severity plots
-            plot_nonconformity_analysis(results, severity, plot_dirs['abstention'])
+            # Store results for current severity plot
+            severity_results[corruption_name] = results
             
             # Log results for current severity
             logger.info(f"\nRAPS Results (Severity {severity}):")
@@ -491,6 +497,9 @@ def main():
             logger.info(f"FPR: {best_metrics['fpr']:.4f}")
             logger.info(f"Abstention Rate: {best_metrics['abstention_rate']:.4f}")
             logger.info(f"Abstention AUC: {current_auc:.4f}")
+        
+        # Plot nonconformity analysis for all corruptions at this severity
+        plot_nonconformity_analysis(severity_results, severity, plot_dirs['abstention'])
 
     # Generate aggregate plots for all corruptions
     plot_metrics_vs_severity(

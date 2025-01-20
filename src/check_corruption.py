@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from data.corruptions import OcclusionCorruption, RainCorruption
+from data.corruptions import OcclusionCorruption, RainCorruption, FogCorruption, BlurCorruption, SnowCorruption
 from data.dataset import ModelNet40Dataset
 from pathlib import Path
 
@@ -28,7 +28,7 @@ def visualize_point_cloud(ax, points, title, color='b', alpha=0.6):
     ax.set_zlim(mid_z - max_range*0.5, mid_z + max_range*0.5)
 
 def check_corruptions(save_dir: str = 'corruption_checks'):
-    """Visualize the effects of both occlusion and rain corruptions"""
+    """Visualize the effects of occlusion, rain, and fog corruptions"""
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
@@ -38,45 +38,53 @@ def check_corruptions(save_dir: str = 'corruption_checks'):
     # Set up corruptions
     occlusion = OcclusionCorruption(seed=42)
     rain = RainCorruption(seed=42)
+    fog = FogCorruption(seed=42)
+    blur = BlurCorruption(seed=42)
+    snow = SnowCorruption(seed=42)
     
     # Sample multiple objects
     sample_indices = [0, 100, 200]  # Add more indices if needed
-    corruptions = {'Occlusion': occlusion, 'Rain': rain}
+    corruptions = {
+        'Occlusion': (occlusion, 'b'),  # Blue for occlusion
+        'Rain': (rain, 'r'),            # Red for rain
+        'Fog': (fog, 'g'),              # Green for fog
+        'Blur': (blur, 'm'),            # Magenta for blur
+        'Snow': (snow, 'c')             # Cyan for snow
+    }
     
-    for idx in sample_indices:
-        points, label = dataset[idx]
-        points = points.numpy()
+    for corruption_name, (corruption, color) in corruptions.items():
+        # Create one large figure for all samples
+        fig = plt.figure(figsize=(20, 12))  # Increased height for 3 rows
+        plt.suptitle(f'{corruption_name} Corruption Effects Across Different Objects', y=0.95, fontsize=16)
         
-        # Create two separate figures for each corruption type
-        for corruption_name, corruption in corruptions.items():
-            fig = plt.figure(figsize=(20, 4))
+        # For each sample
+        for sample_idx, idx in enumerate(sample_indices):
+            points, label = dataset[idx]
+            points = points.numpy()
             
             # Plot original
-            ax = fig.add_subplot(161, projection='3d')
-            visualize_point_cloud(ax, points, f'Original\n{len(points)} points')
+            ax = fig.add_subplot(3, 6, sample_idx*6 + 1, projection='3d')
+            visualize_point_cloud(ax, points, f'Original\nObject {idx}\n{dataset.classes[label]}\n{len(points)} points')
             
             # Plot severities 1-5
             for severity in range(1, 6):
-                ax = fig.add_subplot(161 + severity, projection='3d')
+                ax = fig.add_subplot(3, 6, sample_idx*6 + severity + 1, projection='3d')
                 corrupted_points = corruption(points, severity)
                 
-                color = 'b' if corruption_name == 'Occlusion' else 'r'
                 visualize_point_cloud(
                     ax, 
                     corrupted_points, 
-                    f'{corruption_name}\nSeverity {severity}\n{len(corrupted_points)} points',
+                    f'Severity {severity}\n{len(corrupted_points)} points',
                     color=color
                 )
-            
-            plt.suptitle(f'Object {idx} - {corruption_name} Corruption\n(Class: {dataset.classes[label]})', 
-                        y=1.05, fontsize=14)
-            plt.tight_layout()
-            plt.savefig(
-                save_dir / f'{corruption_name}_sample_{idx}.png', 
-                bbox_inches='tight', 
-                dpi=300
-            )
-            plt.close()
+        
+        plt.tight_layout()
+        plt.savefig(
+            save_dir / f'{corruption_name}_all_samples.png', 
+            bbox_inches='tight', 
+            dpi=300
+        )
+        plt.close()
     
     print(f"Corruption visualizations saved to {save_dir}")
 
