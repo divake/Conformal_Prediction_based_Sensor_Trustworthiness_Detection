@@ -17,23 +17,27 @@ def create_plot_dirs(base_dir: str = 'plots') -> Dict[str, Path]:
     return dirs
 
 def plot_metrics_vs_severity(
-    severities: List[int],
-    coverages: List[float],
-    set_sizes: List[float],
-    abstention_rates: List[float],
+    severities: List[List[int]],
+    coverages: List[List[float]],
+    set_sizes: List[List[float]],
+    abstention_rates: List[List[float]],
+    labels: List[str],
     save_dir: str = 'plots/metrics'
 ) -> None:
-    """Plot key metrics against severity levels for occlusion corruption."""
+    """Plot key metrics against severity levels for multiple corruptions."""
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
     plt.style.use('seaborn')
     plt.figure(figsize=(15, 5))
     
+    colors = ['b', 'r']  # Blue for occlusion, red for rain
+    
     # Coverage plot
     plt.subplot(1, 3, 1)
-    plt.plot(severities, coverages, 'o-', label='Occlusion', linewidth=2)
-    plt.axhline(y=0.9, color='r', linestyle='--', label='Target (90%)')
+    for i, (sev, cov, label) in enumerate(zip(severities, coverages, labels)):
+        plt.plot(sev, cov, f'o-', color=colors[i], label=label.capitalize(), linewidth=2)
+    plt.axhline(y=0.9, color='k', linestyle='--', label='Target (90%)')
     plt.xlabel('Severity')
     plt.ylabel('Coverage')
     plt.title('Coverage vs Severity')
@@ -42,7 +46,8 @@ def plot_metrics_vs_severity(
     
     # Set size plot
     plt.subplot(1, 3, 2)
-    plt.plot(severities, set_sizes, 'o-', label='Occlusion', linewidth=2)
+    for i, (sev, size, label) in enumerate(zip(severities, set_sizes, labels)):
+        plt.plot(sev, size, f'o-', color=colors[i], label=label.capitalize(), linewidth=2)
     plt.xlabel('Severity')
     plt.ylabel('Average Set Size')
     plt.title('Set Size vs Severity')
@@ -51,7 +56,8 @@ def plot_metrics_vs_severity(
     
     # Abstention rate plot
     plt.subplot(1, 3, 3)
-    plt.plot(severities, abstention_rates, 'o-', label='Occlusion', linewidth=2)
+    for i, (sev, rate, label) in enumerate(zip(severities, abstention_rates, labels)):
+        plt.plot(sev, rate, f'o-', color=colors[i], label=label.capitalize(), linewidth=2)
     plt.xlabel('Severity')
     plt.ylabel('Abstention Rate')
     plt.title('Abstention Rate vs Severity')
@@ -63,34 +69,37 @@ def plot_metrics_vs_severity(
     plt.close()
 
 def plot_roc_curves(
-    results: Dict[int, Dict],  # {severity: results_dict}
+    results_by_corruption: Dict[str, Dict[int, Dict]],
     save_dir: str = 'plots/roc'
 ) -> None:
-    """Plot ROC curves for each severity level."""
+    """Plot ROC curves for each severity level and corruption type."""
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
     plt.style.use('seaborn')
     plt.figure(figsize=(10, 8))
     
-    # Use different shades of blue for different severities
-    colors = plt.cm.Blues(np.linspace(0.3, 1, len(results)))
+    colors = {
+        'occlusion': plt.cm.Blues(np.linspace(0.3, 1, 5)),
+        'rain': plt.cm.Reds(np.linspace(0.3, 1, 5))
+    }
     
-    for severity, color in zip(sorted(results.keys()), colors):
-        res = results[severity]['abstention_results']
-        thresholds = sorted(res.keys())
-        fpr_rates = [res[t]['fpr'] for t in thresholds]
-        tpr_rates = [res[t]['tpr'] for t in thresholds]
-        auc = results[severity]['auc']
-        
-        plt.plot(fpr_rates, tpr_rates, color=color, linewidth=2,
-                label=f'Severity {severity} (AUC = {auc:.3f})')
+    for corruption_name, results in results_by_corruption.items():
+        for severity, color in zip(sorted(results.keys()), colors[corruption_name]):
+            res = results[severity]['abstention_results']
+            thresholds = sorted(res.keys())
+            fpr_rates = [res[t]['fpr'] for t in thresholds]
+            tpr_rates = [res[t]['tpr'] for t in thresholds]
+            auc = results[severity]['auc']
+            
+            label = f'{corruption_name.capitalize()} Severity {severity} (AUC = {auc:.3f})'
+            plt.plot(fpr_rates, tpr_rates, color=color, linewidth=2, label=label)
     
     plt.plot([0, 1], [0, 1], 'k--', label='Random')
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('ROC Curves by Severity Level (Occlusion)')
-    plt.legend()
+    plt.title('ROC Curves by Severity Level and Corruption Type')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True)
     
     plt.tight_layout()
@@ -98,30 +107,34 @@ def plot_roc_curves(
     plt.close()
 
 def plot_set_size_distribution(
-    set_sizes_by_severity: Dict[int, np.ndarray],
+    set_sizes_by_corruption: Dict[str, Dict[int, np.ndarray]],
     save_dir: str = 'plots/set_sizes'
 ) -> None:
-    """Plot set size distributions for each severity level."""
+    """Plot set size distributions for each severity level and corruption type."""
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
     plt.style.use('seaborn')
     plt.figure(figsize=(12, 6))
     
-    colors = plt.cm.Blues(np.linspace(0.3, 1, len(set_sizes_by_severity)))
+    colors = {
+        'occlusion': plt.cm.Blues(np.linspace(0.3, 1, 5)),
+        'rain': plt.cm.Reds(np.linspace(0.3, 1, 5))
+    }
     
-    for severity, color in zip(sorted(set_sizes_by_severity.keys()), colors):
-        set_sizes = set_sizes_by_severity[severity]
-        unique_sizes, counts = np.unique(set_sizes, return_counts=True)
-        percentages = (counts / len(set_sizes)) * 100
-        
-        plt.plot(unique_sizes, percentages, 'o-', color=color, linewidth=2,
-                label=f'Severity {severity}')
+    for corruption_name, set_sizes_by_severity in set_sizes_by_corruption.items():
+        for severity, color in zip(sorted(set_sizes_by_severity.keys()), colors[corruption_name]):
+            set_sizes = set_sizes_by_severity[severity]
+            unique_sizes, counts = np.unique(set_sizes, return_counts=True)
+            percentages = (counts / len(set_sizes)) * 100
+            
+            plt.plot(unique_sizes, percentages, 'o-', color=color, linewidth=2,
+                    label=f'{corruption_name.capitalize()} Severity {severity}')
     
     plt.xlabel('Set Size')
     plt.ylabel('Percentage of Samples (%)')
-    plt.title('Set Size Distribution by Severity')
-    plt.legend()
+    plt.title('Set Size Distribution by Severity and Corruption Type')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True)
     
     plt.tight_layout()

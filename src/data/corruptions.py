@@ -48,6 +48,61 @@ class OcclusionCorruption:
         
         return corrupted_points
 
+class RainCorruption:
+    """Rain corruption for point clouds"""
+    def __init__(self, severity_levels: int = 5, seed: Optional[int] = None):
+        self.severity_levels = severity_levels
+        self.rng = np.random.RandomState(seed)
+        # Parameters for different severity levels
+        self.rain_params = {
+            1: {'density': 0.02, 'noise_std': 0.01},  # Light rain
+            2: {'density': 0.04, 'noise_std': 0.02},  # Moderate rain
+            3: {'density': 0.06, 'noise_std': 0.03},  # Heavy rain
+            4: {'density': 0.08, 'noise_std': 0.04},  # Very heavy rain
+            5: {'density': 0.10, 'noise_std': 0.05}   # Extreme rain
+        }
+
+    def __call__(self, points: np.ndarray, severity: int) -> np.ndarray:
+        """
+        Apply rain corruption to point cloud.
+        Args:
+            points (np.ndarray): Point cloud of shape (N, C)
+            severity (int): Severity level from 1 to 5
+        Returns:
+            np.ndarray: Corrupted point cloud
+        """
+        assert 1 <= severity <= self.severity_levels
+        
+        params = self.rain_params[severity]
+        num_points = len(points)
+        
+        # Add random noise to simulate rain droplets
+        noise = self.rng.normal(0, params['noise_std'], size=points[:, :3].shape)
+        
+        # Add random rain points
+        num_rain = int(num_points * params['density'])
+        
+        # Generate rain points within the point cloud bounds
+        mins = points[:, :3].min(axis=0)
+        maxs = points[:, :3].max(axis=0)
+        rain_points = self.rng.uniform(mins, maxs, size=(num_rain, 3))
+        
+        # Add small vertical streaks to simulate falling rain
+        rain_points[:, 2] += self.rng.uniform(-0.1, 0, size=num_rain)  # Falling effect
+        
+        # Combine original points (with noise) and rain points
+        noisy_points = points.copy()
+        noisy_points[:, :3] += noise
+        
+        # Create rain point features (intensity and other features set to mean of original)
+        rain_features = np.zeros((num_rain, points.shape[1]))
+        rain_features[:, :3] = rain_points
+        rain_features[:, 3:] = np.mean(points[:, 3:], axis=0)
+        
+        # Combine original and rain points
+        corrupted_points = np.vstack([noisy_points, rain_features])
+        
+        return corrupted_points
 
 class CorruptedModelNet40Dataset(Dataset):
     """Dataset wrapper that applies corruptions to ModelNet40 point clouds"""
