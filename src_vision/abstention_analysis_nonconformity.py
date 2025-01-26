@@ -10,7 +10,7 @@ import timm
 from scipy import stats
 from data.cifar100 import setup_cifar100
 from data.corruptions import CorruptedCIFAR100Dataset, FogCorruption, SnowCorruption, RainCorruption, MotionBlurCorruption
-from utils.visualization import plot_metrics_vs_severity, plot_roc_curves, plot_set_size_distribution, create_plot_dirs, plot_abstention_analysis,plot_confidence_distributions, analyze_severity_impact
+from utils.visualization import plot_metrics_vs_severity, plot_roc_curves, plot_set_size_distribution, create_plot_dirs, plot_abstention_analysis,plot_confidence_distributions, analyze_severity_impact, create_paper_plots
 from utils.model_utils import get_model_predictions
 from utils.logging_utils import setup_logging
 
@@ -621,6 +621,30 @@ def main():
         )
     
     logger.info("\nAnalysis completed. Plots saved in plots_vision directory.")
+    
+    # Create publication-quality plots for IJCNN paper
+    logger.info("\nGenerating publication plots for IJCNN paper...")
+    create_paper_plots(
+        results_by_corruption={
+            'fog': results_by_severity_fog,
+            'snow': results_by_severity_snow,
+            'rain': results_by_severity_rain,
+            'blur': results_by_severity_motionblur
+        },
+        uncertainty_metrics_by_corruption={
+            'fog': uncertainty_metrics_by_severity_fog,
+            'snow': uncertainty_metrics_by_severity_snow,
+            'rain': uncertainty_metrics_by_severity_rain,
+            'blur': uncertainty_metrics_by_severity_motionblur
+        },
+        set_sizes_by_corruption={
+            'fog': set_sizes_by_severity_fog,
+            'snow': set_sizes_by_severity_snow,
+            'rain': set_sizes_by_severity_rain,
+            'blur': set_sizes_by_severity_motionblur
+        }
+    )
+    logger.info("Publication plots saved in plots_vision/result_paper directory.")
 
 if __name__ == '__main__':
     main()

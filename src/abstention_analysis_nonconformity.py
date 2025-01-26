@@ -13,7 +13,7 @@ from data.dataset import ModelNet40Dataset
 from models.point_transformer_v2 import PointTransformerV2
 from torch.utils.data import DataLoader
 import logging
-from utils.visualization import create_plot_dirs, plot_nonconformity_analysis, plot_metrics_vs_severity, plot_roc_curves, plot_set_size_distribution
+from utils.visualization import create_plot_dirs, plot_nonconformity_analysis, plot_metrics_vs_severity, plot_roc_curves, plot_set_size_distribution, create_paper_plots
 from sklearn.neighbors import KDTree
 
 def setup_logging(logger_name: str = 'nonconformity_abstention') -> logging.Logger:
@@ -370,7 +370,7 @@ def main():
     }
     
     severity_levels = [1, 2, 3, 4, 5]
-    alpha = 0.1  # Target 90% coverage
+    alpha = 0.07  # Target 90% coverage
     k_reg = 5
     lam_reg = 0.01
     
@@ -437,9 +437,9 @@ def main():
             coverage, avg_set_size, threshold, prediction_sets = conformal_prediction_raps(
                 cal_softmax, cal_labels,
                 val_softmax, val_labels,
-                k_reg=5,
-                lam_reg=0.01,
-                alpha=0.1
+                k_reg=k_reg,
+                lam_reg=lam_reg,
+                alpha=alpha
             )
             
             # Compute nonconformity scores for validation set
@@ -478,7 +478,15 @@ def main():
             # Store results and set sizes for aggregate plots
             metrics_data[corruption_name]['results_by_severity'][severity] = {
                 'abstention_results': results,
-                'auc': current_auc
+                'auc': current_auc,
+                'coverage': coverage,
+                'avg_set_size': avg_set_size,
+                'prediction_sets': prediction_sets,
+                'uncertainty_metrics': {
+                    'normalized_entropy': -np.sum(val_softmax * np.log(val_softmax + 1e-7), axis=1) / np.log(val_softmax.shape[1]),
+                    'confidence': np.max(val_softmax, axis=1),
+                    'margin': np.sort(val_softmax, axis=1)[:, -1] - np.sort(val_softmax, axis=1)[:, -2]
+                }
             }
             metrics_data[corruption_name]['set_sizes_by_severity'][severity] = prediction_sets.sum(axis=1)
             
@@ -523,6 +531,35 @@ def main():
     
     logger.info("\nAnalysis completed successfully.")
     logger.info(f"Plots saved in {plot_dirs['metrics']}")
+    
+    # Create publication-quality plots for IJCNN paper
+    logger.info("\nGenerating publication plots for IJCNN paper...")
+    
+    # Prepare uncertainty metrics dictionary
+    uncertainty_metrics = {
+        name: {
+            severity: {
+                'normalized_entropy': metrics_data[name]['results_by_severity'][severity]['uncertainty_metrics']['normalized_entropy'],
+                'confidence': metrics_data[name]['results_by_severity'][severity]['uncertainty_metrics']['confidence'],
+                'margin': metrics_data[name]['results_by_severity'][severity]['uncertainty_metrics']['margin']
+            }
+            for severity in metrics_data[name]['results_by_severity'].keys()
+        }
+        for name in corruptions.keys()
+    }
+    
+    create_paper_plots(
+        results_by_corruption={
+            name: metrics_data[name]['results_by_severity']
+            for name in corruptions.keys()
+        },
+        uncertainty_metrics_by_corruption=uncertainty_metrics,
+        set_sizes_by_corruption={
+            name: metrics_data[name]['set_sizes_by_severity']
+            for name in corruptions.keys()
+        }
+    )
+    logger.info("Publication plots saved in plots/result_paper directory.")
 
 if __name__ == '__main__':
     main()
