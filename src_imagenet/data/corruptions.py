@@ -5,6 +5,7 @@ from PIL import Image, ImageFilter
 import random
 from typing import Tuple, Optional, List
 import torch.nn.functional as F
+from torchvision import transforms
 
 class ImageCorruption:
     """Base class for image corruptions."""
@@ -136,35 +137,35 @@ class MotionBlurCorruption(ImageCorruption):
         
         return blurred
 
-class CorruptedImageNetDataset(Dataset):
-    """Optimized dataset wrapper for corruptions."""
-    def __init__(
-        self,
-        base_dataset: Dataset,
-        corruption: RainCorruption,
-        severity: int = 1,
-        batch_size: int = 32
-    ):
+class CorruptedImageNetDataset(torch.utils.data.Dataset):
+    """Dataset wrapper that applies corruption to images."""
+    def __init__(self, base_dataset, corruption_type, severity=1, batch_size=None, transform=None):
         self.base_dataset = base_dataset
-        self.corruption = corruption(severity)
+        self.corruption = corruption_type(severity=severity)
         self.batch_size = batch_size
-        
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
+        self.transform = transform
+    
+    def __getitem__(self, idx):
         image, label = self.base_dataset[idx]
         
-        # Apply corruption
+        # Convert tensor to PIL for corruption
         if isinstance(image, torch.Tensor):
-            # Process as tensor directly
-            corrupted = self.corruption(image.unsqueeze(0)).squeeze(0)
-        else:
-            # Handle PIL image case
-            corrupted = self.corruption(image)
-            if isinstance(corrupted, Image.Image):
-                corrupted = transforms_to_tensor(corrupted)
+            image = transforms.ToPILImage()(image)
+        
+        # Apply corruption
+        corrupted = self.corruption(image)
+        
+        # Convert back to tensor
+        if not isinstance(corrupted, torch.Tensor):
+            corrupted = transforms.ToTensor()(corrupted)
+        
+        # Apply additional transforms if specified
+        if self.transform is not None:
+            corrupted = self.transform(corrupted)
         
         return corrupted, label
     
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.base_dataset)
 
 def transforms_to_tensor(image: Image.Image) -> torch.Tensor:

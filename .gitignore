@@ -7,3 +7,4 @@ best_model.pth
 logs/
 plots*/
 corruption_checks/
+corruption_test_results/

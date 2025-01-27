@@ -15,7 +15,9 @@ from utils.visualization import (
     create_plot_dirs,
     plot_abstention_analysis,
     plot_confidence_distributions,
-    create_paper_plots
+    create_paper_plots,
+    plot_metrics_vs_severity,
+    analyze_severity_impact
 )
 
 
@@ -221,8 +223,20 @@ def main():
     torch.backends.cudnn.benchmark = True  # Enable cudnn autotuner
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Configure logging
     logger = logging.getLogger('imagenet_conformal')
     logger.setLevel(logging.INFO)
+    
+    # Add console handler if not already added
+    if not logger.handlers:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+    
+    logger.info("Starting ImageNet conformal prediction analysis...")
     
     # Load model from checkpoint
     CHECKPOINT_PATH = '/ssd_4TB/divake/CP_trust_IJCNN/checkpoints/vit_imagenet.pth'
@@ -339,7 +353,9 @@ def main():
         'abstention_qhat': abstention_qhat,
         'abstention_results': abstention_results,
         'auc': auc,
-        'prediction_sets': prediction_sets
+        'prediction_sets': prediction_sets,
+        'softmax_scores': test_probs,  # Store softmax scores
+        'uncertainty_metrics': compute_uncertainty_metrics(test_probs)  # Store uncertainty metrics
     }
     set_sizes_by_corruption['base'][1] = prediction_sets.sum(axis=1)
     uncertainty_metrics_by_corruption['base'][1] = compute_uncertainty_metrics(test_probs)
@@ -403,7 +419,9 @@ def main():
             'abstention_qhat': abstention_qhat,
             'abstention_results': corrupt_abstention_results,
             'auc': corrupt_auc,
-            'prediction_sets': corrupt_sets
+            'prediction_sets': corrupt_sets,
+            'softmax_scores': corrupt_probs,  # Store softmax scores
+            'uncertainty_metrics': compute_uncertainty_metrics(corrupt_probs)  # Store uncertainty metrics
         }
         set_sizes_by_corruption['rain'][severity] = corrupt_sets.sum(axis=1)
         uncertainty_metrics_by_corruption['rain'][severity] = compute_uncertainty_metrics(corrupt_probs)
@@ -415,10 +433,40 @@ def main():
     # Create plots directory
     plot_dirs = create_plot_dirs('plots_imagenet')
     
+    # Analyze severity impact on conformal scores
+    logger.info("\nAnalyzing severity impact on conformal scores...")
+    analyze_severity_impact(
+        softmax_scores_by_corruption={
+            'base': {1: test_probs},  # Base test set
+            'rain': {severity: results_by_corruption['rain'][severity]['softmax_scores'] 
+                    for severity in range(1, 6)}
+        },
+        conformal_qhat=conformal_qhat,
+        k_reg=k_reg,
+        lam_reg=lam_reg,
+        save_dir=plot_dirs['metrics']
+    )
+    
+    # Analyze uncertainty metrics
+    logger.info("\nAnalyzing uncertainty metrics...")
+    uncertainty_metrics = {
+        'base': {1: compute_uncertainty_metrics(test_probs)},
+        'rain': {severity: compute_uncertainty_metrics(results_by_corruption['rain'][severity]['softmax_scores'])
+                for severity in range(1, 6)}
+    }
+    
+    # Plot confidence and entropy distributions
+    plot_confidence_distributions(
+        uncertainty_metrics,
+        colors={'base': '#2ecc71', 'rain': '#3498db'},
+        save_dir=plot_dirs['metrics']
+    )
+    
     # Generate visualizations
     logger.info("\nGenerating visualizations...")
     plot_roc_curves(results_by_corruption, plot_dirs['roc'])
     plot_set_size_distribution(set_sizes_by_corruption, plot_dirs['set_sizes'])
+    plot_metrics_vs_severity(results_by_corruption, plot_dirs['metrics'])
     
     # Generate abstention analysis plots
     plot_abstention_analysis(
@@ -429,13 +477,17 @@ def main():
     
     # Create paper plots
     create_paper_plots(
-        results_by_corruption,
-        uncertainty_metrics_by_corruption,
-        set_sizes_by_corruption,
-        os.path.join(plot_dirs['paper'])
+        results_by_corruption=results_by_corruption,
+        uncertainty_metrics_by_corruption=uncertainty_metrics,
+        set_sizes_by_corruption={
+            'base': {1: prediction_sets.sum(axis=1)},
+            'rain': {severity: results_by_corruption['rain'][severity]['prediction_sets'].sum(axis=1)
+                    for severity in range(1, 6)}
+        },
+        save_dir=os.path.join(plot_dirs['paper'])
     )
     
-    # Print final summary
+    # Print final summary with detailed metrics
     logger.info("\n=== Final Results Summary ===")
     logger.info("\nBase Model Performance:")
     base_metrics = results_by_corruption['base'][1]
@@ -443,7 +495,7 @@ def main():
     logger.info(f"Average Set Size: {base_metrics['avg_set_size']:.4f}")
     logger.info(f"AUC: {base_metrics['auc']:.4f}")
     
-    logger.info("\nRain Corruption Performance:")
+    logger.info("\nRain Corruption Performance by Severity:")
     for severity in range(1, 6):
         if severity in results_by_corruption['rain']:
             rain_metrics = results_by_corruption['rain'][severity]
@@ -451,12 +503,20 @@ def main():
             logger.info(f"Coverage: {rain_metrics['coverage']:.4f}")
             logger.info(f"Average Set Size: {rain_metrics['avg_set_size']:.4f}")
             logger.info(f"AUC: {rain_metrics['auc']:.4f}")
+            logger.info(f"Abstention Rate: {np.mean([res['abstention_rate'] for res in rain_metrics['abstention_results'].values()]):.4f}")
+            
+            # Add uncertainty metrics
+            uncertainty = uncertainty_metrics['rain'][severity]
+            logger.info(f"Average Entropy: {np.mean(uncertainty['entropy']):.4f}")
+            logger.info(f"Average Confidence: {np.mean(uncertainty['confidence']):.4f}")
+            logger.info(f"Average Margin: {np.mean(uncertainty['margin']):.4f}")
     
     logger.info("\n=== Plots Generated ===")
     logger.info(f"ROC Curves: {plot_dirs['roc']}")
     logger.info(f"Set Size Distributions: {plot_dirs['set_sizes']}")
     logger.info(f"Abstention Analysis: {plot_dirs['abstention']}")
     logger.info(f"Paper Plots: {plot_dirs['paper']}")
+    logger.info(f"Metrics and Uncertainty Analysis: {plot_dirs['metrics']}")
     
     logger.info("\nAnalysis completed successfully. All plots saved in plots_imagenet directory.")
 

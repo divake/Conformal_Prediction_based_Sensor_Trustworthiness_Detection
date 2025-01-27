@@ -103,15 +103,21 @@ def test_dataset_wrapper():
     """Test the CorruptedImageNetDataset wrapper."""
     # Setup ImageNet data
     val_dir = '/ssd_4TB/divake/CP_trust_IJCNN/dataset/imagenet/val'
-    transform = transforms.Compose([
+    
+    # First transform without normalization for corruption
+    corruption_transform = transforms.Compose([
         transforms.Resize(256),
         transforms.CenterCrop(224),
-        transforms.ToTensor(),
+        transforms.ToTensor()
+    ])
+    
+    # Final transform for model input
+    final_transform = transforms.Compose([
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                            std=[0.229, 0.224, 0.225])
     ])
     
-    base_dataset = ImageFolder(val_dir, transform=transform)
+    base_dataset = ImageFolder(val_dir, transform=corruption_transform)
     
     # Test dataset wrapper with each corruption
     corruptions = {
@@ -131,7 +137,8 @@ def test_dataset_wrapper():
         corrupted_dataset = CorruptedImageNetDataset(
             base_dataset,
             corruption_class,
-            severity=3  # Test with middle severity
+            severity=3,  # Test with middle severity
+            transform=final_transform  # Apply normalization after corruption
         )
         
         # Create data loader
@@ -165,9 +172,62 @@ def test_dataset_wrapper():
         
         print(f"Saved {corruption_name} dataset test results")
 
+class PILImageFolder(ImageFolder):
+    """Custom ImageFolder that returns PIL images directly."""
+    def __getitem__(self, index):
+        path, target = self.samples[index]
+        image = self.loader(path)
+        return image, target
+
+def test_rain_corruption():
+    """Test rain corruption at all severity levels."""
+    # Create results directory
+    save_dir = 'corruption_test_results'
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Load a few sample images from ImageNet validation set
+    val_dir = '/ssd_4TB/divake/CP_trust_IJCNN/dataset/imagenet/val'
+    dataset = PILImageFolder(val_dir)
+    
+    # Select 3 random images
+    np.random.seed(42)
+    n_samples = 3
+    sample_indices = np.random.choice(len(dataset), n_samples, replace=False)
+    
+    # Create figure for all samples
+    fig, axes = plt.subplots(n_samples, 6, figsize=(18, 3*n_samples))
+    fig.suptitle('Rain Corruption Test: Original and Severity Levels 1-5', fontsize=16)
+    
+    # Process each sample
+    for idx, sample_idx in enumerate(sample_indices):
+        image, _ = dataset[sample_idx]
+        
+        # Plot original image
+        axes[idx, 0].imshow(image)
+        axes[idx, 0].set_title('Original')
+        axes[idx, 0].axis('off')
+        
+        # Apply and plot rain corruption at each severity level
+        for severity in range(1, 6):
+            rain = RainCorruption(severity=severity)
+            corrupted_image = rain(image)
+            
+            axes[idx, severity].imshow(corrupted_image)
+            axes[idx, severity].set_title(f'Severity {severity}')
+            axes[idx, severity].axis('off')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'rain_corruption_test.png'), 
+                bbox_inches='tight', dpi=300)
+    plt.close()
+    
+    print("Rain corruption test completed. Results saved in corruption_test_results/rain_corruption_test.png")
+
 if __name__ == '__main__':
     print("Testing individual corruptions...")
     test_corruptions()
     
     print("\nTesting dataset wrapper...")
-    test_dataset_wrapper() 
+    test_dataset_wrapper()
+    
+    test_rain_corruption() 

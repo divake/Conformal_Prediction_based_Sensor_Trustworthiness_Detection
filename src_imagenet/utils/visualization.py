@@ -5,318 +5,598 @@ import seaborn as sns
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-def create_plot_dirs(base_dir: str) -> Dict[str, str]:
-    """
-    Create directory structure for plots.
+def create_plot_dirs(base_dir: str = 'plots_imagenet') -> Dict[str, Path]:
+    """Create all needed plot directories."""
+    base_dir = Path(base_dir)
+    subdirs = ['metrics', 'roc', 'set_sizes', 'abstention', 'paper']
     
-    Args:
-        base_dir: Base directory for plots
-        
-    Returns:
-        Dictionary mapping plot types to their directories
-    """
-    plot_types = ['metrics', 'roc', 'set_sizes', 'abstention', 'confidence', 'paper', 'corruptions']
-    plot_dirs = {}
+    dirs = {}
+    for subdir in subdirs:
+        path = base_dir / subdir
+        path.mkdir(parents=True, exist_ok=True)
+        dirs[subdir] = path
     
-    for plot_type in plot_types:
-        plot_dir = os.path.join(base_dir, plot_type)
-        os.makedirs(plot_dir, exist_ok=True)
-        plot_dirs[plot_type] = plot_dir
-    
-    return plot_dirs
+    return dirs
 
 def plot_metrics_vs_severity(
-    severities: List[List[int]],
-    coverages: List[List[float]],
-    set_sizes: List[List[float]],
-    abstention_rates: List[List[float]],
-    labels: List[str],
-    save_dir: str
+    results_by_corruption: Dict[str, Dict[int, Dict]],
+    save_dir: str = 'plots_imagenet/metrics'
 ) -> None:
-    """
-    Plot metrics against corruption severity.
+    """Plot key metrics against severity levels."""
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
     
-    Args:
-        severities: List of severity levels for each corruption
-        coverages: List of coverage values for each corruption
-        set_sizes: List of set sizes for each corruption
-        abstention_rates: List of abstention rates for each corruption
-        labels: Names of corruptions
-        save_dir: Directory to save plots
-    """
-    metrics = {
-        'Coverage': coverages,
-        'Average Set Size': set_sizes,
-        'Abstention Rate': abstention_rates
-    }
+    # Set style
+    plt.style.use('seaborn')
+    plt.figure(figsize=(15, 5))
     
-    for metric_name, metric_values in metrics.items():
-        plt.figure(figsize=(10, 6))
-        
-        for i, (values, label) in enumerate(zip(metric_values, labels)):
-            plt.plot(severities[i], values, marker='o', label=label)
-        
-        plt.xlabel('Corruption Severity')
-        plt.ylabel(metric_name)
-        plt.title(f'{metric_name} vs. Corruption Severity')
-        plt.legend()
-        plt.grid(True)
-        
-        plt.savefig(os.path.join(save_dir, f'{metric_name.lower().replace(" ", "_")}_vs_severity.png'),
-                   bbox_inches='tight', dpi=300)
-        plt.close()
+    # Extract data
+    colors = {'base': '#2ecc71', 'rain': '#3498db'}
+    
+    # Coverage plot
+    plt.subplot(1, 3, 1)
+    for corruption_name, results in results_by_corruption.items():
+        severities = sorted(results.keys())
+        coverages = [results[s]['coverage'] for s in severities]
+        if corruption_name == 'base':
+            plt.axhline(y=coverages[0], color=colors[corruption_name], linestyle='--',
+                       label=f'{corruption_name.capitalize()} Coverage')
+        else:
+            plt.plot(severities, coverages, 'o-', 
+                    label=f'{corruption_name.capitalize()} Coverage', 
+                    color=colors[corruption_name], linewidth=2)
+    
+    plt.axhline(y=0.9, color='r', linestyle='--', label='Target (90%)')
+    plt.xlabel('Severity')
+    plt.ylabel('Coverage')
+    plt.title('Coverage vs Severity')
+    plt.grid(True)
+    plt.legend()
+    
+    # Set size plot
+    plt.subplot(1, 3, 2)
+    for corruption_name, results in results_by_corruption.items():
+        severities = sorted(results.keys())
+        set_sizes = [results[s]['avg_set_size'] for s in severities]
+        if corruption_name == 'base':
+            plt.axhline(y=set_sizes[0], color=colors[corruption_name], linestyle='--',
+                       label=f'{corruption_name.capitalize()}')
+        else:
+            plt.plot(severities, set_sizes, 'o-', 
+                    label=corruption_name.capitalize(), 
+                    color=colors[corruption_name], linewidth=2)
+    
+    plt.xlabel('Severity')
+    plt.ylabel('Average Set Size')
+    plt.title('Set Size vs Severity')
+    plt.grid(True)
+    plt.legend()
+    
+    # Abstention rate plot
+    plt.subplot(1, 3, 3)
+    for corruption_name, results in results_by_corruption.items():
+        severities = sorted(results.keys())
+        abstention_rates = [np.mean([r['abstention_rate'] for r in results[s]['abstention_results'].values()]) 
+                          for s in severities]
+        if corruption_name == 'base':
+            plt.axhline(y=abstention_rates[0], color=colors[corruption_name], linestyle='--',
+                       label=f'{corruption_name.capitalize()}')
+        else:
+            plt.plot(severities, abstention_rates, 'o-', 
+                    label=corruption_name.capitalize(), 
+                    color=colors[corruption_name], linewidth=2)
+    
+    plt.xlabel('Severity')
+    plt.ylabel('Abstention Rate')
+    plt.title('Abstention Rate vs Severity')
+    plt.grid(True)
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'metrics_vs_severity.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
 def plot_roc_curves(
     results: Dict[str, Dict[int, Dict]],
-    save_dir: str,
-    title: str = "ROC Curves"
+    save_dir: str = 'plots_imagenet/roc'
 ) -> None:
-    """Plot ROC curves for each corruption type and severity."""
-    # Plot for each severity
-    for severity in range(1, 6):
-        plt.figure(figsize=(10, 10))
-        has_data = False
-        
-        for corruption_name, corruption_results in results.items():
-            if severity in corruption_results:
-                result = corruption_results[severity]
-                if 'abstention_results' in result:
-                    thresholds = sorted(result['abstention_results'].keys())
-                    tpr = [result['abstention_results'][t]['tpr'] for t in thresholds]
-                    fpr = [result['abstention_results'][t]['fpr'] for t in thresholds]
-                    auc = result.get('auc', 0.0)
-                    
-                    plt.plot(fpr, tpr, 
-                            label=f'{corruption_name.capitalize()} (AUC={auc:.3f})')
-                    has_data = True
-        
-        if has_data:
-            plt.plot([0, 1], [0, 1], 'k--', label='Random')
-            plt.xlabel('False Positive Rate')
-            plt.ylabel('True Positive Rate')
-            plt.title(f'{title} (Severity {severity})')
-            plt.legend()
-            plt.grid(True)
+    """Plot ROC curves for each severity level."""
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    plt.style.use('seaborn')
+    plt.figure(figsize=(10, 8))
+    
+    # Use different color maps for each corruption
+    colors = {'base': '#2ecc71', 'rain': '#3498db'}
+    
+    # Plot curves for each corruption type
+    for corruption_name, corruption_results in results.items():
+        if corruption_name == 'base':
+            continue
+        for severity in sorted(corruption_results.keys()):
+            res = corruption_results[severity]['abstention_results']
+            thresholds = sorted(res.keys())
+            fpr_rates = [res[t]['fpr'] for t in thresholds]
+            tpr_rates = [res[t]['tpr'] for t in thresholds]
+            auc = corruption_results[severity]['auc']
             
-            plt.savefig(os.path.join(save_dir, f'roc_curves_severity_{severity}.png'),
-                       bbox_inches='tight', dpi=300)
-        plt.close()
+            plt.plot(fpr_rates, tpr_rates, linewidth=2,
+                    label=f'{corruption_name.capitalize()} Severity {severity} (AUC = {auc:.3f})')
+    
+    plt.plot([0, 1], [0, 1], 'k--', label='Random')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curves by Severity Level')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'roc_curves.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
 def plot_set_size_distribution(
-    set_sizes_by_corruption: Dict[str, Dict[int, np.ndarray]],
-    save_dir: str,
-    title: str = "Distribution of Prediction Set Sizes"
+    set_sizes_dict: Dict[str, Dict[int, np.ndarray]],
+    save_dir: str = 'plots_imagenet/set_sizes'
 ) -> None:
-    """
-    Plot distribution of prediction set sizes.
+    """Plot set size distributions for each severity level."""
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
     
-    Args:
-        set_sizes_by_corruption: Dictionary mapping corruption names to their set sizes
-        save_dir: Directory to save plots
-        title: Plot title
-    """
-    # Plot for each severity
-    for severity in range(1, 6):
-        plt.figure(figsize=(12, 6))
-        has_data = False
-        
-        for corruption_name, set_sizes in set_sizes_by_corruption.items():
-            if severity in set_sizes:
-                sizes = set_sizes[severity]
-                # Add explicit label for the plot
-                sns.kdeplot(sizes, label=f'{corruption_name.capitalize()} Distribution')
-                plt.axvline(np.mean(sizes), linestyle='--', alpha=0.5, 
-                          label=f'{corruption_name.capitalize()} Mean')
-                has_data = True
-        
-        if has_data:
-            plt.xlabel('Set Size')
-            plt.ylabel('Density')
-            plt.title(f'{title} (Severity {severity})')
-            plt.legend()
-            plt.grid(True)
+    plt.style.use('seaborn')
+    plt.figure(figsize=(12, 6))
+    
+    colors = {'base': '#2ecc71', 'rain': '#3498db'}
+    
+    # Plot distributions
+    for corruption_name, severity_dict in set_sizes_dict.items():
+        if corruption_name == 'base':
+            continue
+        for severity in sorted(severity_dict.keys()):
+            set_sizes = severity_dict[severity]
+            unique_sizes, counts = np.unique(set_sizes, return_counts=True)
+            percentages = (counts / len(set_sizes)) * 100
             
-            plt.savefig(os.path.join(save_dir, f'set_size_distribution_severity_{severity}.png'),
-                       bbox_inches='tight', dpi=300)
-        plt.close()
+            plt.plot(unique_sizes, percentages, 'o-', 
+                    color=colors[corruption_name], linewidth=2,
+                    label=f'{corruption_name.capitalize()} Severity {severity}')
+    
+    plt.xlabel('Prediction Set Size')
+    plt.ylabel('Percentage of Samples (%)')
+    plt.title('Set Size Distribution by Severity Level')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'set_size_distributions.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
 def plot_abstention_analysis(
     thresholds: np.ndarray,
     results_base: Dict,
-    save_dir: str = None,
-    title: str = "Abstention Analysis"
+    save_dir: str = 'plots_imagenet/abstention'
 ) -> None:
-    """
-    Plot abstention analysis metrics for base case.
+    """Plot abstention analysis metrics."""
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
     
-    Args:
-        thresholds: Array of abstention thresholds
-        results_base: Dictionary of base results
-        save_dir: Directory to save plots
-        title: Plot title
-    """
-    plt.figure(figsize=(12, 8))
+    plt.style.use('seaborn')
+    fig, axs = plt.subplots(2, 2, figsize=(15, 12))
+    fig.suptitle('Abstention Analysis', fontsize=14)
     
-    # Plot base results with explicit labels
+    # Extract metrics
     tpr = [results_base[t]['tpr'] for t in thresholds]
     fpr = [results_base[t]['fpr'] for t in thresholds]
-    abstention_rates = [results_base[t]['abstention_rate'] for t in thresholds]
+    abs_rate = [results_base[t]['abstention_rate'] for t in thresholds]
     
-    plt.plot(thresholds, tpr, label='True Positive Rate', linestyle='-', color='blue')
-    plt.plot(thresholds, fpr, label='False Positive Rate', linestyle='--', color='red')
-    plt.plot(thresholds, abstention_rates, label='Abstention Rate', linestyle=':', color='green')
+    # ROC curve
+    axs[0, 0].plot(fpr, tpr, 'b-', linewidth=2, label='Base')
+    axs[0, 0].plot([0, 1], [0, 1], 'k--', alpha=0.5)
+    axs[0, 0].set_xlabel('False Positive Rate')
+    axs[0, 0].set_ylabel('True Positive Rate')
+    axs[0, 0].set_title('ROC Curve')
+    axs[0, 0].grid(True)
+    axs[0, 0].legend()
     
-    plt.xlabel('Abstention Threshold')
-    plt.ylabel('Rate')
-    plt.title(title)
-    plt.legend()
-    plt.grid(True)
+    # Abstention rate vs threshold
+    axs[0, 1].plot(thresholds, abs_rate, 'b-', linewidth=2, label='Base')
+    axs[0, 1].set_xlabel('Threshold')
+    axs[0, 1].set_ylabel('Abstention Rate')
+    axs[0, 1].set_title('Abstention Rate vs Threshold')
+    axs[0, 1].grid(True)
+    axs[0, 1].legend()
     
-    if save_dir:
-        plt.savefig(os.path.join(save_dir, 'abstention_analysis_base.png'),
-                    bbox_inches='tight', dpi=300)
+    # TPR/FPR vs threshold
+    axs[1, 0].plot(thresholds, tpr, 'b-', linewidth=2, label='TPR')
+    axs[1, 0].plot(thresholds, fpr, 'b--', linewidth=2, label='FPR')
+    axs[1, 0].set_xlabel('Threshold')
+    axs[1, 0].set_ylabel('Rate')
+    axs[1, 0].set_title('TPR and FPR vs Threshold')
+    axs[1, 0].grid(True)
+    axs[1, 0].legend()
+    
+    # TPR-FPR difference
+    diff = np.array(tpr) - np.array(fpr)
+    axs[1, 1].plot(thresholds, diff, 'b-', linewidth=2, label='TPR-FPR')
+    axs[1, 1].axhline(y=0, color='k', linestyle='--', alpha=0.5)
+    axs[1, 1].set_xlabel('Threshold')
+    axs[1, 1].set_ylabel('TPR - FPR')
+    axs[1, 1].set_title('TPR-FPR Difference')
+    axs[1, 1].grid(True)
+    axs[1, 1].legend()
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'abstention_analysis.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 def plot_confidence_distributions(
-    softmax_scores: np.ndarray,
-    labels: np.ndarray,
-    prediction_sets: np.ndarray,
-    save_dir: str,
-    title: str = "Confidence Score Distributions"
+    uncertainty_metrics: Dict[str, Dict[int, Dict]],
+    colors: Dict[str, str],
+    save_dir: str = 'plots_imagenet/metrics'
 ) -> None:
-    """
-    Plot distributions of confidence scores.
+    """Plot confidence and entropy distributions."""
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
     
-    Args:
-        softmax_scores: Model's softmax probabilities
-        labels: True labels
-        prediction_sets: Prediction sets
-        save_dir: Directory to save plots
-        title: Plot title
-    """
+    plt.style.use('seaborn')
+    plt.figure(figsize=(15, 10))
+    
+    # Plot confidence distributions
+    plt.subplot(2, 2, 1)
+    for corruption_name, metrics in uncertainty_metrics.items():
+        for severity, metric_dict in metrics.items():
+            confidence = metric_dict['confidence']
+            plt.hist(confidence, bins=50, alpha=0.5, 
+                    label=f'{corruption_name.capitalize()} (Severity {severity})',
+                    density=True, color=colors[corruption_name])
+    
+    plt.xlabel('Confidence')
+    plt.ylabel('Density')
+    plt.title('Confidence Distribution')
+    plt.legend()
+    
+    # Plot entropy distributions
+    plt.subplot(2, 2, 2)
+    for corruption_name, metrics in uncertainty_metrics.items():
+        for severity, metric_dict in metrics.items():
+            entropy = metric_dict['entropy']
+            plt.hist(entropy, bins=50, alpha=0.5,
+                    label=f'{corruption_name.capitalize()} (Severity {severity})',
+                    density=True, color=colors[corruption_name])
+    
+    plt.xlabel('Entropy')
+    plt.ylabel('Density')
+    plt.title('Entropy Distribution')
+    plt.legend()
+    
+    # Plot margin distributions
+    plt.subplot(2, 2, 3)
+    for corruption_name, metrics in uncertainty_metrics.items():
+        for severity, metric_dict in metrics.items():
+            margin = metric_dict['margin']
+            plt.hist(margin, bins=50, alpha=0.5,
+                    label=f'{corruption_name.capitalize()} (Severity {severity})',
+                    density=True, color=colors[corruption_name])
+    
+    plt.xlabel('Margin')
+    plt.ylabel('Density')
+    plt.title('Margin Distribution')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'confidence_distributions.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+def analyze_severity_impact(
+    softmax_scores_by_corruption: Dict[str, Dict[int, np.ndarray]],
+    conformal_qhat: float,
+    k_reg: int,
+    lam_reg: float,
+    save_dir: str = 'plots_imagenet/metrics'
+) -> None:
+    """Analyze how severity affects conformal scores."""
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    plt.style.use('seaborn')
     plt.figure(figsize=(12, 6))
     
-    # Get confidence scores
-    confidence_scores = np.max(softmax_scores, axis=1)
+    colors = {'base': '#2ecc71', 'rain': '#3498db'}
     
-    # Split by correctness
-    correct_mask = prediction_sets[np.arange(len(labels)), labels]
-    correct_conf = confidence_scores[correct_mask]
-    incorrect_conf = confidence_scores[~correct_mask]
+    for corruption_name, severity_dict in softmax_scores_by_corruption.items():
+        for severity, scores in severity_dict.items():
+            reg_vec = np.array([0]*k_reg + [lam_reg]*(scores.shape[1]-k_reg))[None,:]
+            sort_idx = np.argsort(scores, axis=1)[:,::-1]
+            sorted_probs = np.take_along_axis(scores, sort_idx, axis=1)
+            sorted_reg = sorted_probs + reg_vec
+            cumsum_reg = sorted_reg.cumsum(axis=1)
+            
+            mean_scores = np.mean(cumsum_reg, axis=0)
+            std_scores = np.std(cumsum_reg, axis=0)
+            
+            plt.plot(range(1, len(mean_scores) + 1), mean_scores,
+                    label=f'{corruption_name.capitalize()} (Severity {severity})',
+                    color=colors[corruption_name])
+            plt.fill_between(range(1, len(mean_scores) + 1),
+                           mean_scores - std_scores,
+                           mean_scores + std_scores,
+                           alpha=0.2, color=colors[corruption_name])
     
-    # Plot distributions with explicit labels
-    if len(correct_conf) > 0:
-        sns.kdeplot(correct_conf, label='Correct Predictions', color='green')
-    if len(incorrect_conf) > 0:
-        sns.kdeplot(incorrect_conf, label='Incorrect Predictions', color='red')
-    
-    plt.xlabel('Confidence Score')
-    plt.ylabel('Density')
-    plt.title(title)
+    plt.axhline(y=conformal_qhat, color='r', linestyle='--',
+                label='Conformal Threshold')
+    plt.xlabel('Number of Classes')
+    plt.ylabel('Cumulative Score')
+    plt.title('Average Conformal Scores by Severity')
     plt.legend()
     plt.grid(True)
     
-    plt.savefig(os.path.join(save_dir, 'confidence_distributions.png'), 
-                bbox_inches='tight', dpi=300)
+    plt.tight_layout()
+    plt.savefig(save_dir / 'severity_impact.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 def create_paper_plots(
-    results_by_corruption: Dict[str, Dict],
-    uncertainty_metrics_by_corruption: Dict[str, Dict],
-    set_sizes_by_corruption: Dict[str, Dict],
-    save_dir: Optional[str] = None
+    results_by_corruption: Dict[str, Dict[int, Dict]],
+    uncertainty_metrics_by_corruption: Dict[str, Dict[int, Dict]],
+    set_sizes_by_corruption: Dict[str, Dict[int, np.ndarray]],
+    save_dir: str = 'plots_imagenet/paper'
 ) -> None:
-    """
-    Create publication-quality plots for the paper.
-    """
-    if save_dir is None:
-        save_dir = os.path.join('plots_imagenet', 'paper')
-    os.makedirs(save_dir, exist_ok=True)
+    """Create publication-quality plots."""
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
     
-    # Set style for paper plots
-    plt.style.use('seaborn')
+    # Set publication style
+    plt.style.use('seaborn-paper')
     plt.rcParams.update({
-        'font.size': 12,
-        'axes.labelsize': 14,
-        'axes.titlesize': 16,
-        'xtick.labelsize': 12,
-        'ytick.labelsize': 12,
-        'legend.fontsize': 12,
-        'figure.titlesize': 16
+        'font.size': 11,
+        'axes.labelsize': 12,
+        'axes.titlesize': 13,
+        'xtick.labelsize': 10,
+        'ytick.labelsize': 10,
+        'legend.fontsize': 10,
+        'figure.titlesize': 14,
+        'figure.dpi': 300,
     })
     
-    # Plot ROC curves for each severity
-    for severity in range(1, 6):
-        plt.figure(figsize=(10, 8))
-        has_data = False
-        
-        for corruption_name, results in results_by_corruption.items():
-            if severity in results and 'abstention_results' in results[severity]:
-                result = results[severity]
-                thresholds = sorted(result['abstention_results'].keys())
-                tpr = [result['abstention_results'][t]['tpr'] for t in thresholds]
-                fpr = [result['abstention_results'][t]['fpr'] for t in thresholds]
-                auc = result.get('auc', 0.0)
-                
-                plt.plot(fpr, tpr, label=f'{corruption_name.capitalize()} (AUC={auc:.3f})')
-                has_data = True
-        
-        if has_data:
-            plt.plot([0, 1], [0, 1], 'k--', label='Random')
-            plt.xlabel('False Positive Rate')
-            plt.ylabel('True Positive Rate')
-            plt.title(f'ROC Curves (Severity {severity})')
-            plt.legend()
-            plt.grid(True)
-            plt.savefig(os.path.join(save_dir, f'roc_curves_severity_{severity}.png'),
-                       bbox_inches='tight', dpi=300)
-        plt.close()
+    colors = {'base': '#2ecc71', 'rain': '#3498db'}
     
-    # Plot set size distributions for each severity
-    for severity in range(1, 6):
-        plt.figure(figsize=(12, 6))
-        has_data = False
-        
-        for corruption_name, set_sizes in set_sizes_by_corruption.items():
-            if severity in set_sizes:
-                sizes = set_sizes[severity]
-                sns.kdeplot(sizes, label=f'{corruption_name.capitalize()} Distribution')
-                plt.axvline(np.mean(sizes), linestyle='--', alpha=0.5,
-                          label=f'{corruption_name.capitalize()} Mean')
-                has_data = True
-        
-        if has_data:
-            plt.xlabel('Set Size')
-            plt.ylabel('Density')
-            plt.title(f'Set Size Distribution (Severity {severity})')
-            plt.legend()
-            plt.grid(True)
-            plt.savefig(os.path.join(save_dir, f'set_size_distribution_severity_{severity}.png'),
-                       bbox_inches='tight', dpi=300)
-        plt.close()
+    # Create unified plots
+    create_unified_abstention_plot(results_by_corruption, colors, save_dir)
+    create_severity_impact_plot(results_by_corruption, colors, save_dir)
+    create_confidence_setsize_plot(uncertainty_metrics_by_corruption, 
+                                 set_sizes_by_corruption, colors, save_dir)
+    create_threshold_analysis_plot(results_by_corruption, colors, save_dir)
+
+def create_unified_abstention_plot(
+    results_by_corruption: Dict[str, Dict[int, Dict]],
+    colors: Dict[str, str],
+    save_dir: Path
+) -> None:
+    """Create unified abstention analysis plot."""
+    plt.figure(figsize=(15, 5))
+    gs = plt.GridSpec(1, 3, width_ratios=[1, 1, 1.2])
     
-    # Plot uncertainty metrics for each corruption type and severity
-    for corruption_name, metrics in uncertainty_metrics_by_corruption.items():
-        for severity in metrics:
-            plt.figure(figsize=(12, 6))
-            metric_data = metrics[severity]
-            
-            # Plot entropy distribution
-            if 'entropy' in metric_data:
-                sns.kdeplot(metric_data['entropy'], label='Entropy')
-            
-            # Plot confidence distribution
-            if 'confidence' in metric_data:
-                sns.kdeplot(metric_data['confidence'], label='Confidence')
-            
-            plt.xlabel('Metric Value')
-            plt.ylabel('Density')
-            plt.title(f'Uncertainty Metrics - {corruption_name.capitalize()} (Severity {severity})')
-            plt.legend()
-            plt.grid(True)
-            plt.savefig(os.path.join(save_dir, f'uncertainty_metrics_{corruption_name}_severity_{severity}.png'),
-                       bbox_inches='tight', dpi=300)
-            plt.close()
+    ax1 = plt.subplot(gs[0])
+    ax2 = plt.subplot(gs[1])
+    ax3 = plt.subplot(gs[2])
     
-    # Reset style
-    plt.style.use('default') 
+    severity = 3  # Medium severity
+    
+    for corruption_name, results in results_by_corruption.items():
+        if corruption_name == 'base':
+            continue
+        res = results[severity]['abstention_results']
+        thresholds = sorted(res.keys())
+        fpr_rates = [res[t]['fpr'] for t in thresholds]
+        tpr_rates = [res[t]['tpr'] for t in thresholds]
+        abstention_rates = [res[t]['abstention_rate'] for t in thresholds]
+        
+        # ROC curve
+        ax1.plot(fpr_rates, tpr_rates, color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+        
+        # TPR/FPR vs Threshold
+        ax2.plot(thresholds, tpr_rates, color=colors[corruption_name],
+                label=f'{corruption_name.capitalize()} (TPR)', linewidth=2)
+        ax2.plot(thresholds, fpr_rates, color=colors[corruption_name],
+                linestyle='--', alpha=0.5, label=f'{corruption_name.capitalize()} (FPR)')
+        
+        # Abstention Rate
+        ax3.plot(thresholds, abstention_rates, color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+    
+    # Style plots
+    ax1.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+    ax1.set_xlabel('False Positive Rate')
+    ax1.set_ylabel('True Positive Rate')
+    ax1.set_title('(a) ROC Curves')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+    
+    ax2.set_xlabel('Nonconformity Threshold')
+    ax2.set_ylabel('Rate')
+    ax2.set_title('(b) TPR/FPR vs Threshold')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+    
+    ax3.set_xlabel('Nonconformity Threshold')
+    ax3.set_ylabel('Abstention Rate')
+    ax3.set_title('(c) Abstention Rate')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'unified_abstention_analysis.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+def create_severity_impact_plot(
+    results_by_corruption: Dict[str, Dict[int, Dict]],
+    colors: Dict[str, str],
+    save_dir: Path
+) -> None:
+    """Create severity impact summary plot."""
+    plt.figure(figsize=(15, 5))
+    gs = plt.GridSpec(1, 3)
+    
+    ax1 = plt.subplot(gs[0])
+    ax2 = plt.subplot(gs[1])
+    ax3 = plt.subplot(gs[2])
+    
+    severities = sorted(list(next(iter(results_by_corruption.values())).keys()))
+    
+    for corruption_name, results in results_by_corruption.items():
+        if corruption_name == 'base':
+            continue
+        coverages = [results[s]['coverage'] for s in severities]
+        set_sizes = [results[s]['avg_set_size'] for s in severities]
+        abstention_rates = [np.mean([r['abstention_rate'] for r in results[s]['abstention_results'].values()])
+                          for s in severities]
+        
+        ax1.plot(severities, coverages, 'o-', color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+        ax2.plot(severities, set_sizes, 'o-', color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+        ax3.plot(severities, abstention_rates, 'o-', color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+    
+    # Style plots
+    ax1.axhline(y=0.9, color='k', linestyle='--', label='Target (90%)')
+    ax1.set_xlabel('Severity Level')
+    ax1.set_ylabel('Coverage')
+    ax1.set_title('(a) Coverage vs Severity')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+    
+    ax2.set_xlabel('Severity Level')
+    ax2.set_ylabel('Average Set Size')
+    ax2.set_title('(b) Set Size vs Severity')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+    
+    ax3.set_xlabel('Severity Level')
+    ax3.set_ylabel('Average Abstention Rate')
+    ax3.set_title('(c) Abstention Rate vs Severity')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'severity_impact_summary.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+def create_confidence_setsize_plot(
+    uncertainty_metrics: Dict[str, Dict[int, Dict]],
+    set_sizes: Dict[str, Dict[int, np.ndarray]],
+    colors: Dict[str, str],
+    save_dir: Path
+) -> None:
+    """Create confidence and set size distribution plot."""
+    plt.figure(figsize=(15, 5))
+    gs = plt.GridSpec(1, 3)
+    
+    ax1 = plt.subplot(gs[0])
+    ax2 = plt.subplot(gs[1])
+    ax3 = plt.subplot(gs[2])
+    
+    severities = sorted(list(next(iter(uncertainty_metrics.values())).keys()))
+    
+    for corruption_name in uncertainty_metrics.keys():
+        if corruption_name == 'base':
+            continue
+        # Extract metrics
+        entropies = [np.mean(uncertainty_metrics[corruption_name][s]['entropy'])
+                    for s in severities]
+        confidences = [np.mean(uncertainty_metrics[corruption_name][s]['confidence'])
+                      for s in severities]
+        
+        # Plot entropy and confidence
+        ax1.plot(severities, entropies, 'o-', color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+        ax2.plot(severities, confidences, 'o-', color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+        
+        # Plot set size distributions for severity 3
+        set_size_dist = set_sizes[corruption_name][3]
+        unique_sizes, counts = np.unique(set_size_dist, return_counts=True)
+        percentages = (counts / len(set_size_dist)) * 100
+        ax3.plot(unique_sizes, percentages, 'o-', color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+    
+    # Style plots
+    ax1.set_xlabel('Severity Level')
+    ax1.set_ylabel('Entropy')
+    ax1.set_title('(a) Predictive Uncertainty')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+    
+    ax2.set_xlabel('Severity Level')
+    ax2.set_ylabel('Average Confidence')
+    ax2.set_title('(b) Model Confidence')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+    
+    ax3.set_xlabel('Set Size')
+    ax3.set_ylabel('Percentage of Samples (%)')
+    ax3.set_title('(c) Set Size Distribution (Severity 3)')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'confidence_setsize_analysis.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+def create_threshold_analysis_plot(
+    results_by_corruption: Dict[str, Dict[int, Dict]],
+    colors: Dict[str, str],
+    save_dir: Path
+) -> None:
+    """Create threshold analysis plot."""
+    plt.figure(figsize=(15, 5))
+    gs = plt.GridSpec(1, 3)
+    
+    ax1 = plt.subplot(gs[0])
+    ax2 = plt.subplot(gs[1])
+    ax3 = plt.subplot(gs[2])
+    
+    severity = 3  # Medium severity
+    
+    for corruption_name, results in results_by_corruption.items():
+        if corruption_name == 'base':
+            continue
+        res = results[severity]['abstention_results']
+        thresholds = sorted(res.keys())
+        
+        # Calculate metrics
+        tpr_minus_fpr = [res[t]['tpr'] - res[t]['fpr'] for t in thresholds]
+        coverage_vs_threshold = [1 - res[t]['abstention_rate'] for t in thresholds]
+        efficiency = [(res[t]['tpr'] * (1 - res[t]['fpr'])) for t in thresholds]
+        
+        # Plot metrics
+        ax1.plot(thresholds, tpr_minus_fpr, color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+        ax2.plot(thresholds, coverage_vs_threshold, color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+        ax3.plot(thresholds, efficiency, color=colors[corruption_name],
+                label=corruption_name.capitalize(), linewidth=2)
+    
+    # Style plots
+    ax1.axhline(y=0, color='k', linestyle='--', alpha=0.5)
+    ax1.set_xlabel('Nonconformity Threshold')
+    ax1.set_ylabel('TPR - FPR')
+    ax1.set_title('(a) Discrimination Ability')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+    
+    ax2.set_xlabel('Nonconformity Threshold')
+    ax2.set_ylabel('Effective Coverage')
+    ax2.set_title('(b) Coverage vs Threshold')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+    
+    ax3.set_xlabel('Nonconformity Threshold')
+    ax3.set_ylabel('Efficiency Score')
+    ax3.set_title('(c) Abstention Efficiency')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'threshold_analysis.png', dpi=300, bbox_inches='tight')
+    plt.close() 
