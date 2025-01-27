@@ -167,15 +167,3 @@ class CorruptedImageNetDataset(torch.utils.data.Dataset):
     
     def __len__(self):
         return len(self.base_dataset)
-
-def transforms_to_tensor(image: Image.Image) -> torch.Tensor:
-    """Convert PIL image to normalized tensor."""
-    # Convert to numpy array and normalize
-    image = np.array(image).astype(np.float32) / 255.0
-    # Change to CxHxW format
-    image = image.transpose(2, 0, 1)
-    return torch.from_numpy(image)
-
-def pil_to_tensor(image: Image.Image) -> torch.Tensor:
-    """Convert PIL Image to normalized tensor."""
-    return transforms_to_tensor(image) 

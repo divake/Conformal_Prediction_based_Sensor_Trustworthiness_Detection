@@ -9,6 +9,8 @@ from scipy import stats
 from data_loader import get_imagenet_dataset
 from data.corruptions import RainCorruption, CorruptedImageNetDataset
 import os
+import time
+from datetime import datetime, timedelta
 from utils.visualization import (
     plot_roc_curves,
     plot_set_size_distribution,
@@ -217,6 +219,10 @@ def get_model_predictions(model: torch.nn.Module, loader: DataLoader, device: to
     return np.concatenate(all_probs), np.concatenate(all_labels)
 
 def main():
+    # Record start time
+    start_time = time.time()
+    start_datetime = datetime.now()
+    
     # Setup
     np.random.seed(42)
     torch.manual_seed(42)
@@ -237,6 +243,7 @@ def main():
         logger.addHandler(console_handler)
     
     logger.info("Starting ImageNet conformal prediction analysis...")
+    logger.info(f"Start time: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Load model from checkpoint
     CHECKPOINT_PATH = '/ssd_4TB/divake/CP_trust_IJCNN/checkpoints/vit_imagenet.pth'
@@ -369,8 +376,7 @@ def main():
         corrupted_dataset = CorruptedImageNetDataset(
             dataset.test_dataset,
             RainCorruption,
-            severity=severity,
-            batch_size=64  # Adjust based on your GPU memory
+            severity=severity
         )
         corrupted_loader = DataLoader(
             corrupted_dataset,
@@ -519,6 +525,17 @@ def main():
     logger.info(f"Metrics and Uncertainty Analysis: {plot_dirs['metrics']}")
     
     logger.info("\nAnalysis completed successfully. All plots saved in plots_imagenet directory.")
+    
+    # Record end time and calculate duration
+    end_time = time.time()
+    end_datetime = datetime.now()
+    duration = end_time - start_time
+    duration_formatted = str(timedelta(seconds=int(duration)))
+    
+    logger.info("\n=== Timing Information ===")
+    logger.info(f"Start time: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"End time: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Total duration: {duration_formatted}")
 
 if __name__ == '__main__':
     main() 
