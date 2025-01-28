@@ -254,12 +254,12 @@ def main():
     model.to(device)  # Move to GPU before loading state dict
     
     # Load state dict efficiently
-    state_dict = torch.load(CHECKPOINT_PATH, map_location=device)
+    state_dict = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=True)
     model.load_state_dict(state_dict)
     model.eval()
     
     # Enable inference optimizations
-    with torch.cuda.amp.autocast():  # Enable automatic mixed precision
+    with torch.amp.autocast('cuda'):  # Enable automatic mixed precision
         model = torch.jit.optimize_for_inference(torch.jit.script(model))
     
     logger.info("Model loaded successfully and optimized for inference")
