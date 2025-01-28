@@ -267,7 +267,7 @@ def main():
     # Load and split dataset
     dataset, cal_loader, test_loader = get_imagenet_dataset(
         samples_per_class=50,  # Use 50 samples per class for balanced evaluation
-        split_ratio=0.2        # 20% for calibration, 80% for test
+        split_ratio=0.5        # 20% for calibration, 80% for test
     )
     
     # Conformal prediction parameters

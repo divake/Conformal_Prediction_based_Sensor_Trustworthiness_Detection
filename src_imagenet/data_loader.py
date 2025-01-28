@@ -7,7 +7,7 @@ from collections import defaultdict
 import os
 
 class ImageNetSplitDataset:
-    def __init__(self, val_dir, split_ratio=0.2, samples_per_class=None, random_state=42, batch_size=32, num_workers=4):
+    def __init__(self, val_dir, split_ratio=0.5, samples_per_class=None, random_state=42, batch_size=32, num_workers=4):
         """
         Initialize ImageNet dataset with fixed split functionality and balanced class sampling.
         
@@ -167,7 +167,7 @@ class ImageNetSplitDataset:
         return self.classes, self.class_to_idx
 
 def get_imagenet_dataset(val_dir='/ssd_4TB/divake/CP_trust_IJCNN/dataset/imagenet/val', 
-                        split_ratio=0.2,
+                        split_ratio=0.5,
                         samples_per_class=None,
                         batch_size=32,
                         num_workers=4,
@@ -203,5 +203,5 @@ if __name__ == "__main__":
     # Example usage with balanced sampling (50 samples per class)
     dataset, cal_loader, test_loader = get_imagenet_dataset(
         samples_per_class=50,  # Use 50 samples per class
-        split_ratio=0.2        # 20% for calibration, 80% for test
+        split_ratio=0.5        # 20% for calibration, 80% for test
     )
