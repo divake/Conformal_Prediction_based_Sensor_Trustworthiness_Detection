@@ -18,8 +18,8 @@ To set up the project, follow these steps:
 
 1. Clone the repository
 ```bash
-git clone [repository-url]
-cd [repository-name]
+git clone https://github.com/divake/Conformal_Prediction_based_Sensor_Trustworthiness_Detection.git
+cd src
 ```
 
 2. Install the required dependencies:
@@ -50,10 +50,8 @@ python src_vision/abstention_analysis_nonconformity.py
 .
 ├── checkpoints/          # Model checkpoints
 ├── corruption_checks/    # Corruption testing utilities
-├── corruption_test_results/  # Results from corruption tests
 ├── dataset/             # Dataset storage
 ├── logs/                # Application logs
-├── paper_plots/         # Plots used in the paper
 ├── plots/               # General visualization plots
 ├── plots_imagenet/      # ImageNet-specific plots
 ├── plots_vision/        # Vision-related plots
@@ -74,11 +72,12 @@ We welcome contributions to improve the project! Here's how you can help:
 Please ensure your code follows the existing style and includes appropriate tests.
 
 ## License
-[Insert your chosen license here]
+MIT
 
 ## Contact
 For questions, suggestions, or collaboration opportunities, please contact:
 - Email: dkumar33@uic.edu
+<<<<<<< HEAD
 
 ## Citation
 If you use this work in your research, please cite our paper:
@@ -99,3 +98,5 @@ ROC curves showing detection performance across different tasks and environmenta
 ### Abstention Behavior
 ![Abstention Analysis](./result_plot/Fig3.png)
 Abstention rates visualization across different perception tasks under various environmental perturbations, showing how the framework adapts its decision-making under different conditions. 
+=======
+>>>>>>> 8eb6babd2340339a756395c993e0700bb53260b9
