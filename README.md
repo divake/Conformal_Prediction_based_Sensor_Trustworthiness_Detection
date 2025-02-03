@@ -18,8 +18,8 @@ To set up the project, follow these steps:
 
 1. Clone the repository
 ```bash
-git clone [repository-url]
-cd [repository-name]
+git clone https://github.com/divake/Conformal_Prediction_based_Sensor_Trustworthiness_Detection.git
+cd src
 ```
 
 2. Install the required dependencies:
@@ -50,10 +50,8 @@ python src_vision/abstention_analysis_nonconformity.py
 .
 ├── checkpoints/          # Model checkpoints
 ├── corruption_checks/    # Corruption testing utilities
-├── corruption_test_results/  # Results from corruption tests
 ├── dataset/             # Dataset storage
 ├── logs/                # Application logs
-├── paper_plots/         # Plots used in the paper
 ├── plots/               # General visualization plots
 ├── plots_imagenet/      # ImageNet-specific plots
 ├── plots_vision/        # Vision-related plots
@@ -74,14 +72,8 @@ We welcome contributions to improve the project! Here's how you can help:
 Please ensure your code follows the existing style and includes appropriate tests.
 
 ## License
-[Insert your chosen license here]
+MIT
 
 ## Contact
 For questions, suggestions, or collaboration opportunities, please contact:
 - Email: dkumar33@uic.edu
-
-## Citation
-If you use this work in your research, please cite our paper:
-```
-[Insert citation information when available]
-``` 
