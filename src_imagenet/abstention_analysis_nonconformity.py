@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 import timm
 from scipy import stats
 from data_loader import get_imagenet_dataset
-from data.corruptions import RainCorruption, CorruptedImageNetDataset
+from data.corruptions import FogCorruption, CorruptedImageNetDataset
 import os
 import time
 from datetime import datetime, timedelta
@@ -140,9 +140,11 @@ def compute_nonconformity_scores(
     softmax_scores: np.ndarray,
     labels: np.ndarray
 ) -> np.ndarray:
-    """Compute nonconformity scores for abstention."""
+    """Compute nonconformity scores with adjusted sensitivity."""
     true_class_probs = softmax_scores[np.arange(len(labels)), labels]
-    return -np.log(true_class_probs + 1e-7)
+    # Add temperature scaling to make scores less extreme
+    temperature = 2.0  # Increase this to make abstention less aggressive
+    return -np.log(true_class_probs + 1e-7) / temperature
 
 def analyze_abstention(
     nonconf_scores: np.ndarray,
@@ -375,7 +377,7 @@ def main():
         # Create corrupted dataset with optimized wrapper
         corrupted_dataset = CorruptedImageNetDataset(
             dataset.test_dataset,
-            RainCorruption,
+            FogCorruption,
             severity=severity
         )
         corrupted_loader = DataLoader(
