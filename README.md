@@ -77,26 +77,18 @@ MIT
 ## Contact
 For questions, suggestions, or collaboration opportunities, please contact:
 - Email: dkumar33@uic.edu
-<<<<<<< HEAD
 
-## Citation
-If you use this work in your research, please cite our paper:
-```
-[Insert citation information when available]
-```
 
 ## Results and Analysis
 
 ### Performance Analysis
-![Performance Metrics](./result_plot/Fig1.png)
+![Performance Metrics](./result_plot/1.results_visualization.png)
 Performance metrics (Coverage, Set Size, Entropy, Confidence, Margin) across different perception tasks and environmental conditions. Heatmaps show framework's adaptation to various perturbations with increasing severity.
 
 ### Detection Performance
-![ROC Analysis](./result_plot/Fig2.png)
+![ROC Analysis](.result_plot/2.all_roc_curves.png)
 ROC curves showing detection performance across different tasks and environmental conditions (rain, fog, snow, motion blur), with severity levels S1-S5. AUC scores demonstrate framework's robustness to perturbations.
 
 ### Abstention Behavior
-![Abstention Analysis](./result_plot/Fig3.png)
+![Abstention Analysis](.result_plot/3.abstention_rate_visualization.png)
 Abstention rates visualization across different perception tasks under various environmental perturbations, showing how the framework adapts its decision-making under different conditions. 
-=======
->>>>>>> 8eb6babd2340339a756395c993e0700bb53260b9
